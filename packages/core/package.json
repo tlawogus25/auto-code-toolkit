@@ -1,0 +1,10 @@
+{
+  "name": "@toolkit/core",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "src/index.mjs",
+  "dependencies": {
+    "openai": "^4.57.0",
+    "@google/genai": "^0.13.0"
+  }
+}

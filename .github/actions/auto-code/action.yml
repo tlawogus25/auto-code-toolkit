@@ -1,0 +1,68 @@
+name: Auto Code (Toolkit)
+description: Reusable composite action to run auto-code toolkit (long-run, self-heal, cost, hybrid)
+inputs:
+  config-path:
+    description: Path to toolkit config json
+    required: false
+    default: config/toolkit.config.json
+  upload-artifacts:
+    description: 'Upload .github/auto/* as artifact'
+    required: false
+    default: 'true'
+runs:
+  using: "composite"
+  steps:
+    - name: Setup Node 22
+      uses: actions/setup-node@v4
+      with:
+        node-version: '22'
+    - name: Cache npm
+      uses: actions/cache@v4
+      with:
+        path: ~/.npm
+        key: npm-${{ runner.os }}-${{ hashFiles('**/package-lock.json', '**/package.json') }}
+        restore-keys: |
+          npm-${{ runner.os }}-
+    - name: Install deps
+      shell: bash
+      run: |
+        npm ci || npm i
+
+    # ✅ Claude/Cursor CLI 자동 설치(없을 때만)
+    - name: Install Claude Code CLI (if missing)
+      shell: bash
+      run: |
+        if ! command -v claude >/dev/null 2>&1; then
+          echo "Installing Claude Code CLI..."
+          curl -fsSL https://docs.anthropic.com/cli/install.sh | bash || (echo "Claude CLI install failed"; exit 1)
+          echo "$HOME/.claude/bin" >> $GITHUB_PATH
+        fi
+
+    - name: Install Cursor CLI (if missing)
+      shell: bash
+      run: |
+        if ! command -v cursor-agent >/dev/null 2>&1; then
+          echo "Installing Cursor CLI..."
+          curl -fsS https://cursor.com/install | bash || (echo "Cursor CLI install failed"; exit 1)
+          echo "$HOME/.cursor/bin" >> $GITHUB_PATH
+        fi
+
+    - name: Run Orchestrator
+      shell: bash
+      env:
+        GH_TOKEN: ${{ env.GH_TOKEN }}                 # ✅ 보장
+        GITHUB_EVENT_PATH: ${{ github.event_path }}
+        TOOLKIT_CONFIG_PATH: ${{ inputs.config-path }}
+        OPENAI_API_KEY: ${{ env.OPENAI_API_KEY }}
+        GEMINI_API_KEY: ${{ env.GEMINI_API_KEY }}
+        ANTHROPIC_API_KEY: ${{ env.ANTHROPIC_API_KEY }}
+        CURSOR_API_KEY: ${{ env.CURSOR_API_KEY }}
+      run: node packages/core/src/index.mjs
+
+    - name: Upload artifacts
+      if: ${{ inputs.upload-artifacts == 'true' }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: auto-logs
+        path: .github/auto/*
+        if-no-files-found: ignore

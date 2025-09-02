@@ -1,0 +1,37 @@
+name: auto-code
+on:
+  issues:
+    types: [opened, edited, labeled]
+  issue_comment:
+    types: [created, edited]
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: read
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    if: >
+      (github.event_name == 'issues' &&
+       contains(github.event.issue.labels.*.name, 'automation:run') &&
+       startsWith(github.event.issue.body, '/auto')) ||
+      (github.event_name == 'issue_comment' &&
+       contains(github.event.issue.labels.*.name, 'automation:run') &&
+       startsWith(github.event.comment.body, '/auto'))
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Auto Code (Toolkit)
+        uses: ./.github/actions/auto-code
+        env:                               # ✅ 이 줄들 추가: 하위 액션에 그대로 전달
+          GH_TOKEN: ${{ github.token }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+        with:
+          config-path: config/toolkit.config.json
+          upload-artifacts: 'true'
