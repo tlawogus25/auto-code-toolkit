@@ -27,7 +27,7 @@
     }
   },
   "providers": {
-    "anthropic": { "plan": "pro" },
-    "cursor":    { "plan": "pro" }
+    "anthropic": { "plan": "free" },
+    "cursor":    { "plan": "free" }
   }
 }
