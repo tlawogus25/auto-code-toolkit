@@ -4,29 +4,83 @@ on:
     types: [opened, edited, labeled]
   issue_comment:
     types: [created, edited]
+  workflow_dispatch:
 
 permissions:
   contents: write
   pull-requests: write
   issues: read
 
+concurrency:
+  group: auto-code-${{ github.ref || github.run_id }}
+  cancel-in-progress: true
+
 jobs:
   run:
-    runs-on: [self-hosted, macOS, ARM64] 
+    runs-on: [self-hosted, macOS, ARM64]
     if: >
       (github.event_name == 'issues' &&
        contains(github.event.issue.labels.*.name, 'automation:run') &&
        startsWith(github.event.issue.body, '/auto')) ||
       (github.event_name == 'issue_comment' &&
        contains(github.event.issue.labels.*.name, 'automation:run') &&
-       startsWith(github.event.comment.body, '/auto'))
+       startsWith(github.event.comment.body, '/auto')) ||
+      (github.event_name == 'workflow_dispatch')
     steps:
-      - name: Checkout
+      - name: Checkout (default branch, deep, clean)
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+          clean: true
+
+      - name: Show HEADs (debug)
+        shell: bash
+        run: |
+          echo "local HEAD=$(git rev-parse HEAD)"
+          echo "remote HEAD=$(git ls-remote origin ${{ github.event.repository.default_branch }} | awk '{print $1}')"
+
+      - name: Ensure local bin on PATH
+        shell: bash
+        run: echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: "Preflight: required files (git object)"
+        shell: bash
+        run: |
+          set -euo pipefail
+          files=(
+            "packages/core/src/index.mjs"
+            "packages/core/src/orchestrator.mjs"
+            "packages/core/src/llm/openai.mjs"
+            "packages/core/src/llm/gemini.mjs"
+          )
+          for f in "${files[@]}"; do
+            if git show "HEAD:$f" >/dev/null 2>&1; then
+              echo "OK (git): $f"
+            else
+              echo "::error file=$f::missing in commit (git object)"
+              exit 1
+            fi
+          done
+
+      - name: "Preflight: required files (git object)"
+        shell: bash
+        run: |
+          set -euo pipefail
+          for f in packages/core/src/index.mjs packages/core/src/orchestrator.mjs packages/core/src/llm/openai.mjs packages/core/src/llm/gemini.mjs; do
+            if [ -f "$f" ]; then
+              echo "OK (fs): $f"
+              ls -l "$f"
+              sha256sum "$f" 2>/dev/null || shasum -a 256 "$f"
+            else
+              echo "::error file=$f::missing on disk (workspace)"
+              exit 1
+            fi
+          done
 
       - name: Auto Code (Toolkit)
         uses: ./.github/actions/auto-code
-        env:                              
+        env:
           GH_TOKEN: ${{ github.token }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
