@@ -1,83 +1,92 @@
-/* Part 1/1 — 플러그인 로더(리포 루트 기준 경로 해석 + 엔트리 자동 탐색)                          */ // 이 파일의 목적을 설명
-import fs from "node:fs";                                                                            // 파일 존재/정보 확인을 위해 fs 로드
-import path from "node:path";                                                                        // 경로 결합/정규화를 위해 path 로드
-import { pathToFileURL } from "node:url";                                                            // 파일 경로를 file:// URL로 바꾸기 위해 url 유틸 로드
+// Part 1/1 — robust plugin registry (ESM, backward-compatible)                                    // 파일 파트: 리포 루트 기준 + 스펙 매핑 + 자동탐색(옵션)
+// Dependencies: node:path, node:url, node:fs, node:fs/promises                                      // 의존성: 경로/URL, 파일 시스템
+// Connectivity: imported by orchestrator.mjs                                                         // 연결: 오케스트레이터에서 사용
 
-/* 내부 헬퍼: repoRoot 기준으로 플러그인 스펙을 파일 시스템 경로로 변환                               */ // 스펙 → 절대 경로 변환기
-function resolveToFsPath(repoRoot, spec) {                                                           // repoRoot와 스펙 문자열을 받음
-  const base = path.resolve(repoRoot);                                                               // repoRoot를 절대 경로로 정규화
-  let rel = spec;                                                                                    // 변환 작업을 위해 스펙을 로컬 변수로
-  if (rel.startsWith("file:")) {                                                                     // 만약 file:// URL이면
-    return new URL(rel).pathname;                                                                    // URL에서 파일 시스템 경로를 바로 반환
-  }
-  if (rel.startsWith("/")) {                                                                         // 절대 경로로 들어오면
-    return path.normalize(rel);                                                                      // 그대로 정규화하여 반환
-  }
-  if (rel.startsWith("./") || rel.startsWith("../")) {                                               // ./ 또는 ../ 로 시작하면
-    return path.resolve(base, rel);                                                                  // repoRoot 기준으로 상대 경로를 해석
-  }
-  // 여기까지 오면 bare/별칭 스펙(예: "packages/plugins/…")로 간주                                 // 점 없이 시작하는 경우 처리
-  // 프로젝트 컨벤션: "packages/…"는 리포 루트 기준 상대경로로 취급                                 // repoRoot를 기준으로 해석
-  return path.resolve(base, rel.replace(/^\.+/, ""));                                                // 선행 점 제거 후 repoRoot와 결합
-}
+import path from "node:path";                                                                         // 경로 유틸
+import { fileURLToPath, pathToFileURL } from "node:url";                                              // 파일 URL 변환
+import fs from "node:fs";                                                                             // 동기 FS
+import fsp from "node:fs/promises";                                                                   // 비동기 FS
 
-/* 내부 헬퍼: 플러그인 디렉터리에서 실제 import할 엔트리 파일을 자동 탐색                             */ // 엔트리 파일 선택기
-function pickEntryFile(fsPath) {                                                                     // 디렉터리 또는 파일 경로 입력
-  try {                                                                                              // 파일/디렉터리 여부를 검사
-    const st = fs.statSync(fsPath);                                                                  // 파일 상태를 동기 조회
-    if (st.isFile()) {                                                                               // 이미 파일이면
-      return fsPath;                                                                                 // 그대로 반환
-    }
-  } catch { /* 파일이 없으면 아래 후보 탐색으로 진행 */ }                                          // 존재하지 않으면 후보 탐색으로
-  // 디렉터리로 가정하고 흔한 엔트리 후보들을 나열                                                   // 일반적인 엔트리 규칙
-  const candidates = [                                                                               // 탐색할 후보 목록
-    path.join(fsPath, "src", "index.mjs"),                                                           // 1) src/index.mjs
-    path.join(fsPath, "index.mjs"),                                                                  // 2) index.mjs
-    path.join(fsPath, "src", "index.js"),                                                            // 3) src/index.js
-    path.join(fsPath, "index.js"),                                                                   // 4) index.js
-    path.join(fsPath, "main.mjs"),                                                                   // 5) main.mjs (옵션)
-    path.join(fsPath, "main.js"),                                                                    // 6) main.js  (옵션)
-  ];                                                                                                 // 후보 나열 끝
-  for (const f of candidates) {                                                                      // 각 후보 경로에 대해
-    if (fs.existsSync(f)) return f;                                                                  // 존재하는 첫 번째 파일을 반환
-  }                                                                                                  // 루프 끝
-  const list = candidates.map(c => `- ${c}`).join("\n");                                             // 후보 목록을 문자열로 변환
-  throw new Error(`Plugin entry not found under: ${fsPath}\nTried:\n${list}`);                       // 친절한 오류를 던짐
-}
+const __FILENAME = fileURLToPath(import.meta.url);                                                    // __filename 대체
+const __DIRNAME  = path.dirname(__FILENAME);                                                          // __dirname 대체
 
-/* 메인: 플러그인들을 로드해 tokens/hook들을 수집                                                     */ // 외부에 제공할 API
-export async function loadPlugins(pluginSpecs = [], repoRoot = process.cwd()) {                      // 스펙 배열과 리포 루트를 받음
-  const tokens = new Map();                                                                          // 토큰 이름 → 핸들러 매핑
-  const hooks = {                                                                                    // 훅 배열들 초기화
-    beforeLLM: [], afterLLM: [],                                                                     // LLM 호출 전/후 훅
-    beforeAgent: [], afterAgent: [],                                                                 // 에이전트 실행 전/후 훅
-    beforePR: [], afterPR: [],                                                                       // PR 생성 전/후 훅
-  };                                                                                                 // 훅 구조 정의 끝
+function findRepoRoot(startDir = __DIRNAME) {                                                         // 리포 루트 탐색
+  let cur = startDir;                                                                                 // 현재 디렉터리 커서
+  while (true) {                                                                                      // 상향 탐색 루프
+    const gitPath = path.join(cur, ".git");                                                           // .git 경로
+    const pkgPath = path.join(cur, "package.json");                                                   // package.json 경로
+    if (fs.existsSync(gitPath) || fs.existsSync(pkgPath)) return cur;                                 // 둘 중 하나 있으면 루트
+    const parent = path.dirname(cur);                                                                 // 부모 계산
+    if (parent === cur) return startDir;                                                              // 파일시스템 루트면 시작점 반환
+    cur = parent;                                                                                     // 한 단계 위로
+  }                                                                                                   // while 종료
+}                                                                                                     // findRepoRoot 종료
 
-  for (const spec of pluginSpecs) {                                                                  // 각 플러그인 스펙에 대해
-    const fsPath = resolveToFsPath(repoRoot, spec);                                                  // 1) 스펙을 리포 루트 기준 경로로 변환
-    const entry = pickEntryFile(fsPath);                                                             // 2) 실제 import할 엔트리 파일 결정
-    const url = pathToFileURL(entry).href;                                                           // 3) 파일 경로를 file:// URL로 변환
-    const mod = await import(url);                                                                   // 4) 동적 import로 모듈 로드
+function getPluginsRoots(repoRoot) {                                                                  // 플러그인 루트 후보
+  const c = [ path.join(repoRoot, "packages", "plugins"), path.join(repoRoot, "plugins") ];           // 후보 두 가지
+  return c.filter(p => fs.existsSync(p) && fs.statSync(p).isDirectory());                              // 실제 존재하는 디렉터리만
+}                                                                                                     // getPluginsRoots 종료
 
-    const register = (typeof mod.default === "function") ? mod.default                               // 5) default 함수가 있으면 register로 사용
-                   : (typeof mod.register === "function") ? mod.register                             //    아니면 register 함수 탐색
-                   : null;                                                                           //    없으면 null
-    if (register) {                                                                                  // 등록 함수가 있으면
-      await register({ tokens, hooks });                                                             // tokens/hooks를 주입하여 등록 실행
-      continue;                                                                                      // 다음 플러그인으로
-    }
+async function findPluginEntries(pluginsRoot) {                                                       // 자동탐색: 엔트리 찾기
+  const out = [];                                                                                     // 결과 배열
+  const items = await fsp.readdir(pluginsRoot, { withFileTypes: true });                              // 디렉터리 항목
+  for (const it of items) {                                                                           // 반복
+    if (!it.isDirectory()) continue;                                                                  // 디렉터리만 대상
+    const dir = path.join(pluginsRoot, it.name);                                                      // 플러그인 디렉터리 경로
+    const cand = [ path.join(dir, "src", "index.mjs"), path.join(dir, "index.mjs") ];                 // 기본 후보
+    const pkgJson = path.join(dir, "package.json");                                                   // package.json 경로
+    if (fs.existsSync(pkgJson)) {                                                                     // package.json 있으면
+      try {                                                                                           // 안전 파싱
+        const pkg = JSON.parse(fs.readFileSync(pkgJson, "utf-8"));                                    // JSON 파싱
+        if (typeof pkg.module === "string") cand.push(path.join(dir, pkg.module));                    // module 후보
+        if (typeof pkg.main   === "string") cand.push(path.join(dir, pkg.main));                      // main 후보
+      } catch {}                                                                                      // 실패 무시
+    }                                                                                                  // pkg 처리 끝
+    const found = cand.find(p => fs.existsSync(p));                                                   // 존재하는 첫 후보
+    if (found) out.push(found);                                                                        // 결과에 추가
+  }                                                                                                   // for 종료
+  return out;                                                                                         // 엔트리 리스트 반환
+}                                                                                                     // findPluginEntries 종료
 
-    // 대안: 모듈이 tokens/hooks 객체를 직접 노출하는 경우 병합                                        // 다른 플러그인 스타일 대응
-    if (mod.tokens instanceof Map) {                                                                 // tokens가 Map이면
-      for (const [k, v] of mod.tokens.entries()) tokens.set(k, v);                                   // 항목을 병합
-    }
-    if (mod.hooks && typeof mod.hooks === "object") {                                                // hooks가 객체면
-      for (const k of Object.keys(hooks)) {                                                          // 우리가 아는 훅 키들에 대해
-        if (Array.isArray(mod.hooks[k])) hooks[k].push(...mod.hooks[k]);                             // 배열이면 뒤에 붙임
-      }                                                                                              // 훅 병합 끝
-    }
-  }                                                                                                  // 플러그인 for 루프 끝
+function mapSpecToEntry(spec, repoRoot) {                                                             // 문자열 스펙을 경로로 매핑
+  if (!spec || typeof spec !== "string") return null;                                                 // 유효성 검사
+  // 절대 경로면 그대로 사용
+  if (path.isAbsolute(spec)) return spec;                                                             // 절대 경로는 그대로
+  // 파일 상대경로면 repoRoot 기준으로 정규화
+  if (spec.startsWith("./") || spec.startsWith("../")) return path.resolve(repoRoot, spec);           // 상대경로 → 절대
+  // 워크스페이스 스타일 별칭 처리
+  if (spec.startsWith("packages/plugins/")) return path.join(repoRoot, spec);                         // packages/plugins → 루트 기준
+  if (spec.startsWith("plugins/"))          return path.join(repoRoot, spec);                         // plugins → 루트 기준
+  // 그 외(bare spec)는 npm 패키지로 간주하여 그대로 import하도록 null 반환(동적 import는 spec 그대로 사용)
+  return null;                                                                                        // null은 "bare spec" 신호
+}                                                                                                     // mapSpecToEntry 종료
 
-  return { tokens, hooks };                                                                           // 수집된 tokens와 hooks 반환
-}                                                                                                     // loadPlugins 끝
+export async function loadPlugins(pluginSpecs = [], repoRootArg = undefined) {                        // 공개 API(호환): (스펙배열, repoRoot)
+  const repoRoot = repoRootArg || findRepoRoot();                                                     // repoRoot 우선순위: 인자 → 탐색
+  const mods = [];                                                                                    // 로드된 모듈 누적
+  if (Array.isArray(pluginSpecs) && pluginSpecs.length > 0) {                                         // 스펙이 명시된 경우
+    for (const spec of pluginSpecs) {                                                                 // 각 스펙 반복
+      const mapped = mapSpecToEntry(spec, repoRoot);                                                  // 매핑 시도
+      if (mapped) {                                                                                   // 파일 경로로 매핑된 경우
+        const href = pathToFileURL(mapped).href;                                                      // 파일 URL 변환
+        const mod  = await import(href);                                                              // 동적 import
+        mods.push(mod?.default ?? mod);                                                               // default 우선
+      } else {                                                                                        // bare spec (npm 패키지)
+        const mod  = await import(spec);                                                              // spec 그대로 import
+        mods.push(mod?.default ?? mod);                                                               // default 우선
+      }                                                                                               // if-else 종료
+    }                                                                                                 // for 종료
+    return mods;                                                                                      // 명시 스펙 로딩 완료
+  }                                                                                                   // if (스펙 존재) 종료
+
+  // 스펙이 없으면 자동탐색 전략 사용
+  const roots = getPluginsRoots(repoRoot);                                                            // 플러그인 루트 후보
+  if (roots.length === 0) return [];                                                                  // 후보 없으면 빈 배열
+  const entries = (await Promise.all(roots.map(findPluginEntries))).flat();                           // 엔트리 탐색
+  for (const entry of entries) {                                                                      // 각 엔트리
+    const href = pathToFileURL(entry).href;                                                           // 파일 URL
+    const mod  = await import(href);                                                                   // 동적 import
+    mods.push({ name: path.basename(path.dirname(entry)), module: mod });                             // 이름 추정 포함
+  }                                                                                                   // for 종료
+  return mods;                                                                                        // 결과 반환
+}                                                                                                     // loadPlugins 종료
