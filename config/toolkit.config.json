@@ -1,5 +1,8 @@
 {
-  "labels": { "run": "automation:run", "highCost": "automation:high-cost" },
+  "labels": {
+    "run": "automation:run",
+    "highCost": "automation:high-cost"
+  },
   "plugins": [
     "./packages/plugins/basic-tokens",
     "./packages/plugins/crawl",
@@ -8,14 +11,39 @@
     "./packages/plugins/hybrid-merge"
   ],
   "tools": {
-    "openai": { "default": "gpt-4o-mini", "heavy": "gpt-4o", "max_output_tokens": 16000 },
-    "gemini": { "default": "gemini-2.5-flash", "heavy": "gemini-2.5-pro" },
-    "claude": { "cli": "claude", "permission_mode": "acceptEdits", "allowed_tools": ["Read","Bash"] },
-    "cursor": { "cli": "cursor-agent", "force": true }
+    "openai": {
+      "default": "gpt-4o-mini",
+      "heavy": "gpt-4o",
+      "max_output_tokens": 16000
+    },
+    "gemini": {
+      "default": "gemini-2.5-flash",
+      "heavy": "gemini-2.5-pro"
+    },
+    "claude": {
+      "cli": "claude",
+      "permission_mode": "acceptEdits",
+      "allowed_tools": [
+        "Read",
+        "Bash"
+      ]
+    },
+    "cursor": {
+      "cli": "cursor-agent",
+      "force": true
+    }
   },
   "policy": {
-    "forbidden_globs": [".env*", "secrets/**", ".git/**"],
-    "allowed_globs": ["src/**", "app/**", "docs/**"],
+    "forbidden_globs": [
+      ".env*",
+      "secrets/**",
+      ".git/**"
+    ],
+    "allowed_globs": [
+      "src/**",
+      "app/**",
+      "docs/**"
+    ],
     "plan_only_threshold_chars": 8000,
     "hard_stop_chars_without_high_cost_label": 20000
   },
@@ -27,7 +55,11 @@
     }
   },
   "providers": {
-    "anthropic": { "plan": "free" },
-    "cursor":    { "plan": "free" }
+    "anthropic": {
+      "plan": "free"
+    },
+    "cursor": {
+      "plan": "free"
+    }
   }
 }
