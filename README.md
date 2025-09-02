@@ -20,3 +20,4 @@
 - **중요**: PR에 “필수 체크” 상태를 만들려면 **`.github/workflows/ci.yml`가 필요**합니다. (본 리포 포함)
 
 ## 사용 예시(실전)
+# auto-code-toolkit
