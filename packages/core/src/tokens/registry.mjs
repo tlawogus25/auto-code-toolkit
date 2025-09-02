@@ -1,69 +1,83 @@
-/* Part 1/1 — registry.mjs 플러그인 경로 리졸버 추가 (의존성: node:url, node:path, node:fs) */
-/* 이 파일의 목적: "packages/plugins/..." 같은 워크스페이스 별칭을 실제 파일 경로(파일 URL)로 변환하여 import()가 동작하도록 보정한다. */
-import { fileURLToPath, pathToFileURL } from "node:url";      // ESM 파일 경로 변환 유틸을 불러온다.
-import path from "node:path";                                 // 경로 결합/정규화에 사용한다.
-import fs from "node:fs";                                     // 파일 존재 여부 점검에 사용한다.
+/* Part 1/1 — 플러그인 로더(리포 루트 기준 경로 해석 + 엔트리 자동 탐색)                          */ // 이 파일의 목적을 설명
+import fs from "node:fs";                                                                            // 파일 존재/정보 확인을 위해 fs 로드
+import path from "node:path";                                                                        // 경로 결합/정규화를 위해 path 로드
+import { pathToFileURL } from "node:url";                                                            // 파일 경로를 file:// URL로 바꾸기 위해 url 유틸 로드
 
-/* __filename/__dirname 대체(ESM 환경): 현재 모듈의 실제 파일 시스템 경로를 구한다. */
-const __filename = fileURLToPath(import.meta.url);            // 현재 모듈의 파일 경로를 문자열로 얻는다.
-const __dirname  = path.dirname(__filename);                  // 현재 모듈이 위치한 디렉터리 경로를 구한다.
-
-/* 워크스페이스의 packages 디렉터리를 계산한다.
-   현재 파일은 packages/core/src/tokens/registry.mjs 라고 가정하므로,
-   여기서 ../../.. 를 올라가면 packages 디렉터리에 도달한다. */
-const PACKAGES_DIR = path.resolve(__dirname, "..", "..", "..");  // 예: /repo/packages
-const PLUGINS_DIR  = process.env.PLUGINS_DIR                    // 환경변수로 오버라이드 가능하게 한다.
-  ? path.resolve(process.env.PLUGINS_DIR)                       // 지정되면 절대경로로 정규화한다.
-  : path.join(PACKAGES_DIR, "plugins");                         // 기본값: /repo/packages/plugins
-
-/* 주어진 스펙 문자열(spec)을 import() 가능한 "파일 URL" 문자열로 변환한다. */
-async function resolvePlugin(spec) {                            // 비동기 함수: 필요 시 파일 검사 수행
-  /* 1) 절대경로/상대경로/파일URL은 그대로 처리한다. */
-  if (spec.startsWith("./") || spec.startsWith("../")) {        // 상대경로라면
-    const url = new URL(spec, import.meta.url);                 // 현재 파일 기준으로 상대경로를 절대 파일 URL로 바꾼다.
-    return url.href;                                            // import()가 사용할 href를 반환한다.
+/* 내부 헬퍼: repoRoot 기준으로 플러그인 스펙을 파일 시스템 경로로 변환                               */ // 스펙 → 절대 경로 변환기
+function resolveToFsPath(repoRoot, spec) {                                                           // repoRoot와 스펙 문자열을 받음
+  const base = path.resolve(repoRoot);                                                               // repoRoot를 절대 경로로 정규화
+  let rel = spec;                                                                                    // 변환 작업을 위해 스펙을 로컬 변수로
+  if (rel.startsWith("file:")) {                                                                     // 만약 file:// URL이면
+    return new URL(rel).pathname;                                                                    // URL에서 파일 시스템 경로를 바로 반환
   }
-  if (spec.startsWith("/") || spec.startsWith("file:")) {       // 절대경로나 file: URL이면
-    return spec.startsWith("file:") ? spec : pathToFileURL(spec).href;  // file:면 그대로, 아니면 파일 URL로 변환한다.
+  if (rel.startsWith("/")) {                                                                         // 절대 경로로 들어오면
+    return path.normalize(rel);                                                                      // 그대로 정규화하여 반환
   }
+  if (rel.startsWith("./") || rel.startsWith("../")) {                                               // ./ 또는 ../ 로 시작하면
+    return path.resolve(base, rel);                                                                  // repoRoot 기준으로 상대 경로를 해석
+  }
+  // 여기까지 오면 bare/별칭 스펙(예: "packages/plugins/…")로 간주                                 // 점 없이 시작하는 경우 처리
+  // 프로젝트 컨벤션: "packages/…"는 리포 루트 기준 상대경로로 취급                                 // repoRoot를 기준으로 해석
+  return path.resolve(base, rel.replace(/^\.+/, ""));                                                // 선행 점 제거 후 repoRoot와 결합
+}
 
-  /* 2) "packages/plugins/..." 같은 워크스페이스 별칭을 파일 경로로 치환한다. */
-  if (spec.startsWith("packages/plugins/")) {                   // 문제의 케이스를 감지한다.
-    const rel = spec.replace(/^packages\/plugins\//, "");       // 앞부분을 떼고 플러그인 상대경로만 남긴다.
-    /* 후보 경로들을 나열한다(확장자/엔트리파일 다양성 대응). */
-    const candidates = [
-      path.join(PLUGINS_DIR, rel, "index.mjs"),                 // 1순위: index.mjs
-      path.join(PLUGINS_DIR, rel, "index.js"),                  // 2순위: index.js
-      path.join(PLUGINS_DIR, rel + ".mjs"),                     // 3순위: 단일 파일(.mjs)
-      path.join(PLUGINS_DIR, rel + ".js"),                      // 4순위: 단일 파일(.js)
-      path.join(PLUGINS_DIR, rel, "main.mjs"),                  // 5순위: main.mjs (옵션)
-      path.join(PLUGINS_DIR, rel, "main.js"),                   // 6순위: main.js  (옵션)
-    ];                                                          // 위 순서는 일반적인 모듈 엔트리를 포괄한다.
-    for (const p of candidates) {                               // 각 후보 경로에 대해
-      if (fs.existsSync(p)) {                                   // 파일이 실제로 존재한다면
-        return pathToFileURL(p).href;                           // 파일 URL로 변환해 반환한다.
-      }
+/* 내부 헬퍼: 플러그인 디렉터리에서 실제 import할 엔트리 파일을 자동 탐색                             */ // 엔트리 파일 선택기
+function pickEntryFile(fsPath) {                                                                     // 디렉터리 또는 파일 경로 입력
+  try {                                                                                              // 파일/디렉터리 여부를 검사
+    const st = fs.statSync(fsPath);                                                                  // 파일 상태를 동기 조회
+    if (st.isFile()) {                                                                               // 이미 파일이면
+      return fsPath;                                                                                 // 그대로 반환
     }
-    /* 어떤 후보도 존재하지 않으면 친절한 오류 메시지로 실패한다. */
-    throw new Error(
-      `Plugin "${spec}" not found under workspace plugins dir.\n` +
-      `Tried:\n- ${candidates.join("\n- ")}\n` +
-      `Resolved PLUGINS_DIR=${PLUGINS_DIR}`
-    );                                                          // 사용자가 바로 원인 파악 가능하도록 경로들을 출력한다.
-  }
-
-  /* 3) 그 외(진짜 npm 패키지명)는 그대로 반환한다. Node가 node_modules에서 해상도한다. */
-  return spec;                                                  // bare specifier는 npm 패키지로 간주해 import(spec) 하도록 그대로 둔다.
+  } catch { /* 파일이 없으면 아래 후보 탐색으로 진행 */ }                                          // 존재하지 않으면 후보 탐색으로
+  // 디렉터리로 가정하고 흔한 엔트리 후보들을 나열                                                   // 일반적인 엔트리 규칙
+  const candidates = [                                                                               // 탐색할 후보 목록
+    path.join(fsPath, "src", "index.mjs"),                                                           // 1) src/index.mjs
+    path.join(fsPath, "index.mjs"),                                                                  // 2) index.mjs
+    path.join(fsPath, "src", "index.js"),                                                            // 3) src/index.js
+    path.join(fsPath, "index.js"),                                                                   // 4) index.js
+    path.join(fsPath, "main.mjs"),                                                                   // 5) main.mjs (옵션)
+    path.join(fsPath, "main.js"),                                                                    // 6) main.js  (옵션)
+  ];                                                                                                 // 후보 나열 끝
+  for (const f of candidates) {                                                                      // 각 후보 경로에 대해
+    if (fs.existsSync(f)) return f;                                                                  // 존재하는 첫 번째 파일을 반환
+  }                                                                                                  // 루프 끝
+  const list = candidates.map(c => `- ${c}`).join("\n");                                             // 후보 목록을 문자열로 변환
+  throw new Error(`Plugin entry not found under: ${fsPath}\nTried:\n${list}`);                       // 친절한 오류를 던짐
 }
 
-/* 기존의 플러그인 로더(loadPlugins)를 사용 중이라면, 내부 import(spec)를 import(await resolvePlugin(spec))로 교체한다.
-   아래는 drop-in 예시 구현(프로젝트에 이미 구현이 있다면 import 호출부만 교체하면 된다). */
-export async function loadPlugins(pluginSpecs = []) {           // plugin 스펙 문자열 배열을 받는다.
-  const mods = [];                                              // 로드된 모듈들을 담을 배열
-  for (const spec of pluginSpecs) {                             // 각 스펙에 대해
-    const resolved = await resolvePlugin(spec);                 // 스펙을 파일 URL 또는 원래 스펙으로 해석한다.
-    const mod = await import(resolved);                         // 동적으로 모듈을 로드한다.
-    mods.push(mod?.default ?? mod);                             // default export가 있으면 우선 사용하고 없으면 모듈 객체를 넣는다.
-  }
-  return mods;                                                  // 모든 플러그인을 로드해 반환한다.
-}
+/* 메인: 플러그인들을 로드해 tokens/hook들을 수집                                                     */ // 외부에 제공할 API
+export async function loadPlugins(pluginSpecs = [], repoRoot = process.cwd()) {                      // 스펙 배열과 리포 루트를 받음
+  const tokens = new Map();                                                                          // 토큰 이름 → 핸들러 매핑
+  const hooks = {                                                                                    // 훅 배열들 초기화
+    beforeLLM: [], afterLLM: [],                                                                     // LLM 호출 전/후 훅
+    beforeAgent: [], afterAgent: [],                                                                 // 에이전트 실행 전/후 훅
+    beforePR: [], afterPR: [],                                                                       // PR 생성 전/후 훅
+  };                                                                                                 // 훅 구조 정의 끝
+
+  for (const spec of pluginSpecs) {                                                                  // 각 플러그인 스펙에 대해
+    const fsPath = resolveToFsPath(repoRoot, spec);                                                  // 1) 스펙을 리포 루트 기준 경로로 변환
+    const entry = pickEntryFile(fsPath);                                                             // 2) 실제 import할 엔트리 파일 결정
+    const url = pathToFileURL(entry).href;                                                           // 3) 파일 경로를 file:// URL로 변환
+    const mod = await import(url);                                                                   // 4) 동적 import로 모듈 로드
+
+    const register = (typeof mod.default === "function") ? mod.default                               // 5) default 함수가 있으면 register로 사용
+                   : (typeof mod.register === "function") ? mod.register                             //    아니면 register 함수 탐색
+                   : null;                                                                           //    없으면 null
+    if (register) {                                                                                  // 등록 함수가 있으면
+      await register({ tokens, hooks });                                                             // tokens/hooks를 주입하여 등록 실행
+      continue;                                                                                      // 다음 플러그인으로
+    }
+
+    // 대안: 모듈이 tokens/hooks 객체를 직접 노출하는 경우 병합                                        // 다른 플러그인 스타일 대응
+    if (mod.tokens instanceof Map) {                                                                 // tokens가 Map이면
+      for (const [k, v] of mod.tokens.entries()) tokens.set(k, v);                                   // 항목을 병합
+    }
+    if (mod.hooks && typeof mod.hooks === "object") {                                                // hooks가 객체면
+      for (const k of Object.keys(hooks)) {                                                          // 우리가 아는 훅 키들에 대해
+        if (Array.isArray(mod.hooks[k])) hooks[k].push(...mod.hooks[k]);                             // 배열이면 뒤에 붙임
+      }                                                                                              // 훅 병합 끝
+    }
+  }                                                                                                  // 플러그인 for 루프 끝
+
+  return { tokens, hooks };                                                                           // 수집된 tokens와 hooks 반환
+}                                                                                                     // loadPlugins 끝
