@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   run:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, macOS, ARM64] 
     if: >
       (github.event_name == 'issues' &&
        contains(github.event.issue.labels.*.name, 'automation:run') &&
@@ -26,7 +26,7 @@ jobs:
 
       - name: Auto Code (Toolkit)
         uses: ./.github/actions/auto-code
-        env:                               # ✅ 이 줄들 추가: 하위 액션에 그대로 전달
+        env:                              
           GH_TOKEN: ${{ github.token }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}

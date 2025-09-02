@@ -13,38 +13,70 @@ jobs:
     if: ${{ github.event.pull_request.merged == true && contains(github.event.pull_request.labels.*.name, 'automation:continue') }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      # PR 코멘트/본문에서 직전 프롬프트를 찾아 후속 이슈를 생성합니다.
+      - name: Create follow-up issue with previous prompt context
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const { owner, repo } = context.repo;
 
-      - name: Find latest prompt body (merged)
-        id: prompt
-        shell: bash
-        run: |
-          set -e
-          FILE=$(ls -t .github/auto/prompt-*.md 2>/dev/null | head -n 1 || true)
-          if [ -z "$FILE" ]; then
-            echo "body=No previous prompt found." >> $GITHUB_OUTPUT
-          else
-            echo "body<<EOF" >> $GITHUB_OUTPUT
-            cat "$FILE" >> $GITHUB_OUTPUT
-            echo "EOF" >> $GITHUB_OUTPUT
-          fi
+            // 1) PR 코멘트 전부 조회
+            const comments = await github.paginate(
+              github.rest.issues.listComments,
+              { owner, repo, issue_number: pr.number, per_page: 100 }
+            );
 
-      - name: Open a new follow-up issue
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          TITLE="Continue: follow-up tasks after PR #${{ github.event.pull_request.number }}"
-          BODY=$(cat <<'MD'
-/auto edit long diagnose autorepair test-build lint-fix cooldown-15s time-120m steps-2
-이전 PR의 작업을 이어서 다음 우선순위를 진행합니다.
-- 실패/미흡 테스트 보완
-- 경량 e2e 1~2개 추가(가능 시)
-- README 보강
+            // 2) 우리가 남긴 프롬프트 코멘트 찾기(오케스트레이터 포맷 탐색)
+            //    - "# Original Prompt" 또는 "## Last Agent Prompt" 헤더를 단서로 사용
+            let promptBlock = null;
+            for (const c of comments.reverse()) {
+              const body = c.body || "";
+              if (body.includes("# Original Prompt") || body.includes("## Last Agent Prompt")) {
+                promptBlock = body;
+                break;
+              }
+            }
 
-[Context from previous run]
-MD
-)
-          BODY="$BODY
+            // 3) 코멘트가 없으면 PR 본문에서 대체(오케스트레이터가 "## Prompt (truncated)"를 넣음)
+            if (!promptBlock) {
+              const body = pr.body || "";
+              if (body.includes("## Prompt")) {
+                promptBlock = body;
+              }
+            }
 
-${{ steps.prompt.outputs.body }}"
-          gh issue create --title "$TITLE" --body "$BODY" --label "automation:run"
+            // 4) 그래도 없으면 안내 문구로 대체
+            if (!promptBlock) {
+              promptBlock = "_No previous prompt could be retrieved from PR comments/body._";
+            }
+
+            // 5) 너무 길면 안전하게 자르기(이슈 본문 한도 대비 여유)
+            const MAX = 55000;
+            if (promptBlock.length > MAX) {
+              promptBlock = promptBlock.slice(0, MAX) + "\n\n_(truncated)_";
+            }
+
+            // 6) 후속 이슈 본문 템플릿
+            const template = [
+              "/auto edit long diagnose autorepair test-build lint-fix cooldown-15s time-120m steps-2",
+              "이전 PR의 작업을 이어서 다음 우선순위를 진행합니다.",
+              "- 실패/미흡 테스트 보완",
+              "- 경량 e2e 1~2개 추가(가능 시)",
+              "- README 보강",
+              "",
+              "[Context from previous run]",
+              "",
+              promptBlock
+            ].join("\n");
+
+            // 7) 이슈 생성 (필수 라벨 부여)
+            const title = `Continue: follow-up tasks after PR #${pr.number}`;
+            const issue = await github.rest.issues.create({
+              owner, repo,
+              title,
+              body: template,
+              labels: ["automation:run"]
+            });
+
+            core.info(`Opened issue #${issue.data.number} for follow-up.`);
