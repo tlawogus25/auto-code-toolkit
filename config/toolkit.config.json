@@ -1,11 +1,11 @@
 {
   "labels": { "run": "automation:run", "highCost": "automation:high-cost" },
   "plugins": [
-    "packages/plugins/basic-tokens",
-    "packages/plugins/crawl",
-    "packages/plugins/self-heal",
-    "packages/plugins/cost",
-    "packages/plugins/hybrid-merge"
+    ".packages/plugins/basic-tokens",
+    ".packages/plugins/crawl",
+    ".packages/plugins/self-heal",
+    ".packages/plugins/cost",
+    ".packages/plugins/hybrid-merge"
   ],
   "tools": {
     "openai": { "default": "gpt-4o-mini", "heavy": "gpt-4o", "max_output_tokens": 16000 },
