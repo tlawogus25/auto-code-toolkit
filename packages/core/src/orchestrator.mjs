@@ -82,6 +82,7 @@ export async function runOrchestrator({ repoRoot, configPath, eventPath }) {    
   ].join("\n");                                                                     // 최종 LLM 입력 본문
 
   async function genPrompt(){                                                       // LLM 호출 래퍼(모델별 분기)
+
   if (ctx.llm === "openai") {                                                     // OpenAI 선택 시
     const { text, usage } = await runOpenAI({                                     // OpenAI Responses 호출
       client: makeOpenAI(process.env.OPENAI_API_KEY),                             // OpenAI 클라이언트 생성(키 필요)
@@ -174,6 +175,7 @@ export async function runOrchestrator({ repoRoot, configPath, eventPath }) {    
       if (!ctx.agentPrompt || typeof ctx.agentPrompt !== "string" || !ctx.agentPrompt.trim()) {
         ctx.agentPrompt = "Continue.";
       } // 프롬프트 보정
+
     }                                                                                // 루프 끝
   } else {                                                                           // 단발 모드
     await runOneStep(1);                                                             // 1단계만 실행
@@ -186,6 +188,7 @@ export async function runOrchestrator({ repoRoot, configPath, eventPath }) {    
   const costLine = `OpenAI usage: in=${ctx.usageTotals.openai.input} out=${ctx.usageTotals.openai.output}`;
 
   const infoMd = [
+
     `## Auto-run Info`,
     ``,
     `- LLM: **${ctx.llm}** (${ctx.model})`,
@@ -202,9 +205,9 @@ export async function runOrchestrator({ repoRoot, configPath, eventPath }) {    
     "```",
     "",
     ctx.longMode ? `> Long-run: budget ${ctx.budgetMinutes} min / ${ctx.budgetSteps} steps.` : ""
-  ].join("\n");
+  ].join("\n");                                                                       // 문자열 결합 완료
 
-  const promptMd = [
+  const promptMd = [                                                                  // 전체 프롬프트/마지막 에이전트 입력 기록
     `# Original Prompt`,
     "",
     "```",
@@ -216,7 +219,7 @@ export async function runOrchestrator({ repoRoot, configPath, eventPath }) {    
     "```",
     ctx.agentPrompt,
     "```"
-  ].join("\n");
+  ].join("\n");                                                                       // 문자열 결합 완료
 
   // ✅ 디렉터리 보장 후 파일 경로를 outDir 기반으로 생성(핵심 수정 반영)                                            // *** 핵심 저장 경로 ***
   const prBodyPath = path.join(outDir, `pr-body-${Date.now()}.md`);                  // PR 본문 파일 경로
@@ -245,6 +248,7 @@ export async function runOrchestrator({ repoRoot, configPath, eventPath }) {    
       { stdio: "inherit" }
     );
   }
+
 
   for (const h of hooks.afterPR) await h(ctx);                                       // PR 생성 후 훅 실행
 
