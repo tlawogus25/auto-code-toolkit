@@ -4,11 +4,11 @@
     "highCost": "automation:high-cost"
   },
   "plugins": [
-    "./packages/plugins/basic-tokens",
-    "./packages/plugins/crawl",
-    "./packages/plugins/self-heal",
-    "./packages/plugins/cost",
-    "./packages/plugins/hybrid-merge"
+    "/packages/plugins/basic-tokens",
+    "/packages/plugins/crawl",
+    "/packages/plugins/self-heal",
+    "/packages/plugins/cost",
+    "/packages/plugins/hybrid-merge"
   ],
   "tools": {
     "openai": {
