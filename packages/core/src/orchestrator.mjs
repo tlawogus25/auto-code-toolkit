@@ -81,7 +81,8 @@ export async function runOrchestrator({ repoRoot, configPath, eventPath }) {    
     ctx.planOnly ? "- (플랜 전용: 실행명령 생략)" : "- 최종 실행할 수정 단계"
   ].join("\n");                                                                     // 최종 LLM 입력 본문
 
-  async function genPrompt(){                
+  async function genPrompt(){                                                       // LLM 호출 래퍼(모델별 분기)
+
   if (ctx.llm === "openai") {                                                     // OpenAI 선택 시
     const { text, usage } = await runOpenAI({                                     // OpenAI Responses 호출
       client: makeOpenAI(process.env.OPENAI_API_KEY),                             // OpenAI 클라이언트 생성(키 필요)
@@ -171,19 +172,23 @@ export async function runOrchestrator({ repoRoot, configPath, eventPath }) {    
       if (existsSync(cancelPath)) break;                                             // CANCEL 파일 있으면 중단
       if ((Date.now()-start) > maxMs) break;                                         // 시간 예산 초과 시 중단
       await runOneStep(step);                                                        // 단계 실행
-      if (!ctx.agentPrompt || typeof ctx.agentPrompt !== "string") ctx.agentPrompt = "Continue."; // 프롬프트 보정
+      if (!ctx.agentPrompt || typeof ctx.agentPrompt !== "string" || !ctx.agentPrompt.trim()) {
+        ctx.agentPrompt = "Continue.";
+      } // 프롬프트 보정
+
     }                                                                                // 루프 끝
   } else {                                                                           // 단발 모드
     await runOneStep(1);                                                             // 1단계만 실행
   }                                                                                  // 분기 끝
   for (const h of hooks.beforePR) await h(ctx);                                      // PR 생성 전 훅 실행
 
-  const tokenList = (ctx.tokens||[]).join(", ") || "(none)";                         // 사용 토큰(키워드) 목록 문자열
-  const labelList = labels.join(", ") || "(none)";                                   // 라벨 목록 문자열
-  const truncatedUserDemand = ctx.userDemand.slice(0, 2000);                         // 사용자 본문 일부(2k)만 발췌
-  const costLine = `OpenAI usage: in=${ctx.usageTotals.openai.input} out=${ctx.usageTotals.openai.output}`; // OpenAI 사용량 표기
+  const tokenList = (ctx.tokens||[]).join(", ") || "(none)";
+  const labelList = labels.join(", ") || "(none)";
+  const truncatedUserDemand = (ctx.userDemand || "").slice(0, 2000);
+  const costLine = `OpenAI usage: in=${ctx.usageTotals.openai.input} out=${ctx.usageTotals.openai.output}`;
 
-  const infoMd = [                                                                    // PR 본문(요약) 마크다운
+  const infoMd = [
+
     `## Auto-run Info`,
     ``,
     `- LLM: **${ctx.llm}** (${ctx.model})`,
@@ -222,15 +227,28 @@ export async function runOrchestrator({ repoRoot, configPath, eventPath }) {    
   writeFileSync(prBodyPath, infoMd, "utf8");                                         // PR 본문 파일 쓰기
   writeFileSync(promptBodyPath, promptMd, "utf8");                                   // 프롬프트 파일 쓰기
 
-  const title = `auto: ${ctx.branch} [${ctx.llm}/${ctx.agent}] (tokens: ${tokenList})`; // PR 제목 생성
-  execSync(`gh pr create --title ${JSON.stringify(title)} --body-file ${JSON.stringify(prBodyPath)} --base main --head ${ctx.branch}`, { stdio: "inherit" }); // gh로 PR 생성
+  // === PR 생성 ===
+  const title = `auto: ${ctx.branch} [${ctx.llm}/${ctx.agent}] (tokens: ${tokenList})`;
+  execSync(
+    `gh pr create --title ${JSON.stringify(title)} --body-file ${JSON.stringify(prBodyPath)} --base main --head ${ctx.branch}`,
+    { stdio: "inherit" }
+  );
 
-  const prNumber = execSync(`gh pr view --json number --head ${ctx.branch} --jq .number`).toString().trim(); // 생성된 PR 번호 조회
-  ctx.prNumber = prNumber || null;                                                   // 컨텍스트에 저장(없으면 null)
+  // === 🔧 FIX: PR 번호 안전 조회(gh pr view --head 삭제) ===
+  // (A) gh pr list 로 조회
+  const prNumber = execSync(
+    `gh pr list -s all --head ${ctx.branch} --json number --jq '.[0].number // empty'`
+  ).toString().trim();
 
-  if (prNumber) {                                                                    // PR 번호가 있으면
-    execSync(`gh pr comment ${prNumber} --body-file ${JSON.stringify(promptBodyPath)}`, { stdio: "inherit" }); // 프롬프트 전문을 코멘트로 추가
-  }                                                                                  // 분기 끝
+  ctx.prNumber = prNumber || null;
+
+  if (prNumber) {
+    execSync(
+      `gh pr comment ${prNumber} --body-file ${JSON.stringify(promptBodyPath)}`,
+      { stdio: "inherit" }
+    );
+  }
+
 
   for (const h of hooks.afterPR) await h(ctx);                                       // PR 생성 후 훅 실행
 
