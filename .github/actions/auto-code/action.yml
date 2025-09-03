@@ -57,6 +57,7 @@ runs:
         GEMINI_API_KEY: ${{ env.GEMINI_API_KEY }}
         ANTHROPIC_API_KEY: ${{ env.ANTHROPIC_API_KEY }}
         CURSOR_API_KEY: ${{ env.CURSOR_API_KEY }}
+        PLUGINS_DIR: ${{ github.workspace }}/packages/plugins
       run: node packages/core/src/index.mjs
 
     - name: Upload artifacts
