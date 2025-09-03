@@ -81,20 +81,46 @@ export async function runOrchestrator({ repoRoot, configPath, eventPath }) {    
     ctx.planOnly ? "- (플랜 전용: 실행명령 생략)" : "- 최종 실행할 수정 단계"
   ].join("\n");                                                                     // 최종 LLM 입력 본문
 
-  async function genPrompt(){                                                       // LLM 호출 래퍼(모델별 분기)
-    if (ctx.llm === "openai") {                                                     // OpenAI 선택 시
-      const { text, usage } = await runOpenAI({                                     // OpenAI Responses 호출
-        client: makeOpenAI(process.env.OPENAI_API_KEY),                             // 클라이언트 생성(키 필요)
-        model: ctx.model, system: systemGuard, user: content,                       // 모델/시스템/유저 입력
-        reasoning: { effort: ctx.planOnly ? "medium" : "high" }                     // 추론 노력도 설정
-      });                                                                            // 호출 종료
-      if (usage) { ctx.usageTotals.openai.input += (usage.input_tokens||0); ctx.usageTotals.openai.output += (usage.output_tokens||0); } // 사용량 누적
-      return text;                                                                   // 응답 텍스트 반환
-    } else {                                                                         // 그 외(Gemini 등)
-      const { text } = await runGemini({ client: makeGemini(process.env.GEMINI_API_KEY), model: ctx.model, user: content }); // Gemini 호출
-      return text;                                                                   // 응답 텍스트 반환
-    }                                                                                // 분기 끝
-  }                                                                                  // 함수 끝
+  async function genPrompt(){                
+  if (ctx.llm === "openai") {                                                     // OpenAI 선택 시
+    const { text, usage } = await runOpenAI({                                     // OpenAI Responses 호출
+      client: makeOpenAI(process.env.OPENAI_API_KEY),                             // OpenAI 클라이언트 생성(키 필요)
+      model: ctx.model, system: systemGuard, user: content,                       // 모델/시스템/유저 입력
+      reasoning: { effort: ctx.planOnly ? "medium" : "high" }                     // 추론 노력도 설정
+    });                                                                            // 호출 종료
+    if (usage) { ctx.usageTotals.openai.input += (usage.input_tokens||0); ctx.usageTotals.openai.output += (usage.output_tokens||0); } // 사용량 누적
+    return text;                                                                   // 응답 텍스트 반환
+  } else {                                                                         // Gemini 우선 경로
+    try {                                                                          // 예외를 잡아 대체(fallback)로 전환합니다.
+      const { text } = await runGemini({                                           // Gemini 호출(재시도 포함)
+        client: makeGemini(process.env.GEMINI_API_KEY),                            // Gemini 클라이언트 생성
+        model: ctx.model,                                                          // 선택된 모델 사용
+        user: content                                                              // 사용자 입력 전달
+      });                                                                          // 호출 종료
+      return text;                                                                 // 성공 시 텍스트 반환
+    } catch (e) {                                                                  // 실패 시
+      ctx.diagnostics.last = {                                                     // 진단 정보를 기록합니다.
+        type: "llm-fallback",                                                      // 유형: LLM 대체
+        from: "gemini",                                                            // 원 공급자
+        to: "openai",                                                              // 대체 공급자
+        message: String(e?.message || e)                                           // 에러 메시지 기록
+      };                                                                           // 진단 객체 종료
+      const fallbackModel = (ctx.tools?.openai?.default) || "gpt-4o-mini";         // 설정에 정의된 기본 OpenAI 모델 사용
+      const { text, usage } = await runOpenAI({                                    // OpenAI로 대체 호출
+        client: makeOpenAI(process.env.OPENAI_API_KEY),                            // OpenAI 클라이언트 생성
+        model: fallbackModel,                                                      // 대체 모델
+        system: systemGuard,                                                       // 동일한 시스템 프롬프트
+        user: content,                                                             // 동일한 사용자 입력
+        reasoning: { effort: ctx.planOnly ? "medium" : "high" }                    // 추론 노력도 유지
+      });                                                                          // 호출 종료
+      if (usage) {                                                                 // 사용량이 보고되면
+        ctx.usageTotals.openai.input += (usage.input_tokens||0);                   // 입력 토큰을 누적하고
+        ctx.usageTotals.openai.output += (usage.output_tokens||0);                 // 출력 토큰을 누적합니다.
+      }                                                                            // 사용량 누적 종료
+      return text;                                                                 // 대체 결과를 반환합니다.
+    }                                                                              // catch 종료
+  }                                                                                // 분기 끝
+}                                                                                                                   // 함수 끝
 
   ctx.agentPrompt = await genPrompt();                                               // 에이전트에 줄 최종 프롬프트 생성
   for (const h of hooks.afterLLM) await h(ctx);                                      // LLM 호출 후 훅 실행
