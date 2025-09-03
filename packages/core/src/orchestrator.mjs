@@ -123,32 +123,88 @@ export async function runOrchestrator({ repoRoot, configPath, eventPath }) {    
   }                                                                                // 분기 끝
 }                                                                                                                   // 함수 끝
 
-  ctx.agentPrompt = await genPrompt();                                               // 에이전트에 줄 최종 프롬프트 생성
-  for (const h of hooks.afterLLM) await h(ctx);                                      // LLM 호출 후 훅 실행
+  // === genPrompt (교체) =========================================================
+  async function genPrompt(){
+    let text = "";
+    try {
+      if (ctx.llm === "openai") {
+        const { text: t, usage } = await runOpenAI({
+          client: makeOpenAI(process.env.OPENAI_API_KEY),
+          model: ctx.model, system: systemGuard, user: content,
+          reasoning: { effort: ctx.planOnly ? "medium" : "high" }
+        });
+        if (usage) {
+          ctx.usageTotals.openai.input += (usage.input_tokens||0);
+          ctx.usageTotals.openai.output += (usage.output_tokens||0);
+        }
+        text = (t || "").trim();
+        if (!text) {
+          const { text: tg } = await runGemini({
+          client: makeGemini(process.env.GEMINI_API_KEY),
+          model: ctx.model, user: content
+        });
+        text = (tg || "").trim();
+        }
+        } else {
+          const { text: tg } = await runGemini({
+          client: makeGemini(process.env.GEMINI_API_KEY),
+          model: ctx.model, user: content
+        });
+        text = (tg || "").trim();
+        if (!text) {
+          const { text: to, usage } = await runOpenAI({
+            client: makeOpenAI(process.env.OPENAI_API_KEY),
+            model: ctx.model, system: systemGuard, user: content,
+            reasoning: { effort: ctx.planOnly ? "medium" : "high" }
+          });
+          if (usage) {
+            ctx.usageTotals.openai.input += (usage.input_tokens||0);
+            ctx.usageTotals.openai.output += (usage.output_tokens||0);
+          }
+          text = (to || "").trim();
+        }
+      }
+    } catch (e) {
+      console.error("[genPrompt error]", e?.message || e);
+      text = "";
+    }
 
-  if (ctx.tokenFlags?.dryRun) return { dryRun: true, ctx };                          // 드라이런 플래그면 여기서 종료
-  if (ctx.agent === "none" || ctx.planOnly) return { planOnly: true, ctx };          // 에이전트 없음/플랜 전용이면 종료
-
-  function checkpointCommit(msg){                                                    // 체크포인트 커밋 헬퍼
-    try { execSync(`git add -A`, { stdio: "inherit" }); execSync(`git commit -m ${JSON.stringify(msg)}`, { stdio: "inherit" }); } // 변경이 있으면 커밋
-    catch { console.log("No changes to commit for checkpoint."); }                   // 변경이 없으면 안내
-  }                                                                                  // 함수 끝
-
-  execSync(`git config user.name "github-actions[bot]"`, { stdio: "inherit" });      // 커밋 사용자명 설정
-  execSync(`git config user.email "github-actions[bot]@users.noreply.github.com"`, { stdio: "inherit" }); // 커밋 이메일 설정
-  const branch = `auto/${Date.now()}`;                                               // 작업 브랜치명(시간 기반)
-  ctx.branch = branch;                                                                // 컨텍스트에 저장
-  execSync(`git checkout -b ${branch}`, { stdio: "inherit" });                       // 새 브랜치 생성/체크아웃
-
-  // ✅ 출력 디렉터리 보장(핵심 수정): AUTO_OUT_DIR 우선, 없으면 .github/auto 사용                                   // *** 핵심 변경 시작 ***
-  const outDir = process.env.AUTO_OUT_DIR                                           // 환경변수 지정 시
-    ? path.resolve(process.env.AUTO_OUT_DIR)                                        // 절대 경로로 정규화
-    : path.join(repoRoot, ".github", "auto");                                       // 기본값: 리포/.github/auto
-  fs.mkdirSync(outDir, { recursive: true });                                        // 상위까지 재귀 생성(ENOENT 방지)
-  // ✅ 취소 파일 경로도 동일 outDir 아래로 통일                                                                       // CANCEL 파일 경로 일관화
-  const cancelPath = path.join(outDir, "CANCEL");                                   // CANCEL 파일 경로
-  const start = Date.now();                                                         // 실행 시작 시각(ms)
-  // ✅ 핵심 변경 끝                                                                                                   // *** 핵심 변경 종료 ***
+    if (!text) {
+      const fallback = [
+        "## 작업 개요",
+        "- Next.js(App Router) + ws 기반 오목(15x15) 실시간 동기화",
+        "- 허용 경로(app/, src/, docs/**)만 수정",
+        "",
+        "## 파일 플랜(필수 산출물 반영)",
+        "- app/game/[roomId]/page.tsx: 라우팅/입장/렌더",
+        "- src/ui/Board.tsx: 캔버스/셀 클릭 핸들링",
+        "- src/ui/HUD.tsx: 턴/승리/메시지",
+        "- src/lib/game/rules.ts: 5목 판정(가로/세로/양대각)",
+        "- src/lib/game/types.ts: 타입 정의",
+        "- src/state/useGameStore.ts: 상태(zustand/Context)",
+        "- src/server/ws.ts: ws 서버/룸/브로드캐스트",
+        "- src/lib/net/messages.ts: 메시지 타입",
+        "- tests/unit/wincheck.test.ts: 규칙 단위테스트",
+        "- tests/e2e/omok.spec.ts: (가능 시) e2e",
+        "- docs/GAMEPLAY.md: 규칙/로컬 실행",
+        "",
+        "## 단계",
+        "1) 타입/규칙 → 2) UI → 3) ws → 4) 테스트/문서",
+        "커밋은 작은 단위, 실패 시 로그로 자가치유",
+      ].join("\n");
+      return fallback;
+    }
+    return text;
+  }
+  // === genPrompt 이후 가드 (교체) ==============================================
+  ctx.agentPrompt = await genPrompt();
+  if (!ctx.agentPrompt || !String(ctx.agentPrompt).trim()) {
+    ctx.planOnly = true;
+    console.log("[orchestrator] Empty agent prompt → planOnly=true; agent run skipped.");
+  }
+  for (const h of hooks.afterLLM) await h(ctx);
+  if (ctx.tokenFlags?.dryRun) return { dryRun: true, ctx };
+  if (ctx.agent === "none" || ctx.planOnly) return { planOnly: true, ctx };                                                                                                   // *** 핵심 변경 종료 ***
 
   async function runOneStep(step) {                                                 // 한 단계 실행(에이전트→커밋→푸시)
     for (const h of hooks.beforeAgent) await h(ctx);                                // 에이전트 전 훅
