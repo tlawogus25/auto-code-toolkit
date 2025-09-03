@@ -81,7 +81,7 @@ export async function runOrchestrator({ repoRoot, configPath, eventPath }) {    
     ctx.planOnly ? "- (플랜 전용: 실행명령 생략)" : "- 최종 실행할 수정 단계"
   ].join("\n");                                                                     // 최종 LLM 입력 본문
 
-  async function genPrompt(){                                                       // LLM 호출 래퍼(모델별 분기)
+  async function genPrompt(){                
   if (ctx.llm === "openai") {                                                     // OpenAI 선택 시
     const { text, usage } = await runOpenAI({                                     // OpenAI Responses 호출
       client: makeOpenAI(process.env.OPENAI_API_KEY),                             // OpenAI 클라이언트 생성(키 필요)
