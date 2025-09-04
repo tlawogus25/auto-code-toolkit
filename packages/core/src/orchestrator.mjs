@@ -69,7 +69,9 @@ export async function runOrchestrator({ repoRoot, configPath, eventPath }) {   /
     `- 금지 경로: ${(policy.forbidden_globs||[".env*","secrets/**",".git/**"]).join(", ")}`,
     "- .env* / 비밀키 / .git 은 읽기·쓰기도 금지",
     "- 테스트가 있으면 실행 전략 제안",
-    "- 변경은 설명 가능한 작은 커밋 단위 권장"
+    "- 변경은 설명 가능한 작은 커밋 단위 권장",
+    "- 절대 쉘/Bash 명령을 실행하지 말 것(파일 편집/패치만 수행)",
+    "- 존재하지 않는 디렉터리는 패치 내에서 생성 후 파일을 추가"
   ].join("\n");
 
   const content = [                                                             // LLM 입력 콘텐츠
