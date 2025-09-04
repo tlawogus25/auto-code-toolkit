@@ -219,7 +219,6 @@ export async function runOrchestrator({ repoRoot, configPath, eventPath }) {
   const costLine = `OpenAI usage: in=${ctx.usageTotals.openai.input} out=${ctx.usageTotals.openai.output}`;
 
   const infoMd = [
-
     `## Auto-run Info`,
     ``,
     `- LLM: **${ctx.llm}** (${ctx.model})`,
@@ -237,7 +236,7 @@ export async function runOrchestrator({ repoRoot, configPath, eventPath }) {
     ""
   ].join("\n");
 
-  const promptMd = [                                                                  // 전체 프롬프트/마지막 에이전트 입력 기록
+  const promptMd = [
     `# Original Prompt`,
     "",
     "```",
