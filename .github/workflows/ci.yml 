@@ -1,23 +1,37 @@
-name: ci
-on:
-  pull_request:
-    branches: [ main ]
-
-jobs:
-  test_build:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+name: ci                                   # 워크플로 이름(Required checks 표시에 사용)
+on:                                        # 트리거
+  pull_request:                            # PR에 대해 실행
+    branches: [ main ]                     # main 대상 PR
+jobs:                                      # 여러 잡 정의
+  test:                                    # ✅ 'test'로 명명해 브랜치 보호와 일치
+    runs-on: ubuntu-latest                 # Ubuntu 러너
+    steps:                                 # 단계
+      - uses: actions/checkout@v4          # 소스 체크아웃
+      - uses: actions/setup-node@v4        # Node 설치
+        with: { node-version: '22' }       # Node 22
+      - uses: actions/cache@v4             # npm 캐시
         with:
-          node-version: '22'
-      - name: Cache npm
-        uses: actions/cache@v4
+          path: ~/.npm                     # 캐시 경로
+          key: npm-${{ runner.os }}-${{ hashFiles('**/package-lock.json', '**/package.json') }} # 키
+          restore-keys: |                  # 복원 키
+            npm-${{ runner.os }}-
+      - run: npm ci || npm i               # 의존성 설치
+      - run: npm test --if-present         # 테스트(없으면 스킵)
+  build:                                   # ✅ 'build'로 명명해 보호 규칙과 일치
+    runs-on: ubuntu-latest                 # Ubuntu 러너
+    needs: [test]                          # test 성공 후 실행
+    steps:                                 # 단계
+      - uses: actions/checkout@v4          # 체크아웃
+      - uses: actions/setup-node@v4        # Node
+        with: { node-version: '22' }       # Node 22
+      - uses: actions/cache@v4             # npm 캐시
         with:
-          path: ~/.npm
-          key: npm-${{ runner.os }}-${{ hashFiles('**/package-lock.json', '**/package.json') }}
+          path: ~/.npm                     # 캐시 경로
+          key: npm-${{ runner.os }}-${{ hashFiles('**/package-lock.json', '**/package.json') }} # 키
           restore-keys: |
             npm-${{ runner.os }}-
-      - run: npm ci || npm i
-      - run: npm test --if-present
-      - run: npm run build --if-present
+      - run: npm ci || npm i               # 설치
+      - run: npm run build --if-present    # 빌드(없으면 스킵)
+# 참고: 브랜치 보호가 당장 'ci / test_build'로 묶여 있다면,
+# 보호 규칙을 'ci / test', 'ci / build'로 갱신하거나,
+# 위 대신 기존 단일 job 이름을 'test_build'로 유지해도 된다. :contentReference[oaicite:13]{index=13}
