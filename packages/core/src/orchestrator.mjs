@@ -1,4 +1,4 @@
-// Orchestrator with long-run + self-heal/cost + hybrid-merge support
+// Orchestrator with empty-prompt guard + OpenAI fallback + hybrid-merge support
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { execSync } from "node:child_process";
 import path from "node:path";
@@ -56,8 +56,7 @@ export async function runOrchestrator({ repoRoot, configPath, eventPath }) {
   const max = policy.hard_stop_chars_without_high_cost_label ?? 20000;
   const planThreshold = policy.plan_only_threshold_chars ?? 8000;
   if (!(ctx.tokenFlags?.force && highCost)) {
-    if (ctx.userDemand.length > max && !highCost)
-      throw new Error("Input too long without high-cost label.");
+    if (ctx.userDemand.length > max && !highCost) throw new Error("Input too long without high-cost label.");
   }
   ctx.planOnly = ctx.planOnly || (ctx.userDemand.length > planThreshold && !highCost);
 
@@ -81,6 +80,22 @@ export async function runOrchestrator({ repoRoot, configPath, eventPath }) {
     ctx.planOnly ? "- (플랜 전용: 실행명령 생략)" : "- 최종 실행할 수정 단계"
   ].join("\n");
 
+  async function callOpenAIOnce({ userText }) {
+    const fallbackModel = (ctx.tools?.openai?.default) || "gpt-4o-mini";
+    const { text, usage } = await runOpenAI({
+      client: makeOpenAI(process.env.OPENAI_API_KEY),
+      model: fallbackModel,
+      system: systemGuard,
+      user: userText,
+      reasoning: { effort: ctx.planOnly ? "medium" : "high" }
+    });
+    if (usage) {
+      ctx.usageTotals.openai.input += (usage.input_tokens||0);
+      ctx.usageTotals.openai.output += (usage.output_tokens||0);
+    }
+    return text || "";
+  }
+
   async function genPrompt(){
     if (ctx.llm === "openai") {
       const { text, usage } = await runOpenAI({
@@ -88,8 +103,11 @@ export async function runOrchestrator({ repoRoot, configPath, eventPath }) {
         model: ctx.model, system: systemGuard, user: content,
         reasoning: { effort: ctx.planOnly ? "medium" : "high" }
       });
-      if (usage) { ctx.usageTotals.openai.input += (usage.input_tokens||0); ctx.usageTotals.openai.output += (usage.output_tokens||0); }
-      return text;
+      if (usage) {
+        ctx.usageTotals.openai.input += (usage.input_tokens||0);
+        ctx.usageTotals.openai.output += (usage.output_tokens||0);
+      }
+      return text || "";
     } else {
       try {
         const { text } = await runGemini({
@@ -97,40 +115,59 @@ export async function runOrchestrator({ repoRoot, configPath, eventPath }) {
           model: ctx.model,
           user: content
         });
-        return text;
-      } catch (e) {
-        ctx.diagnostics.last = {
-          type: "llm-fallback",
-          from: "gemini",
-          to: "openai",
-          message: String(e?.message || e)
-        };
-        const fallbackModel = (ctx.tools?.openai?.default) || "gpt-4o-mini";
-        const { text, usage } = await runOpenAI({
-          client: makeOpenAI(process.env.OPENAI_API_KEY),
-          model: fallbackModel,
-          system: systemGuard,
-          user: content,
-          reasoning: { effort: ctx.planOnly ? "medium" : "high" }
-        });
-        if (usage) {
-          ctx.usageTotals.openai.input += (usage.input_tokens||0);
-          ctx.usageTotals.openai.output += (usage.output_tokens||0);
+        // ❶ Gemini가 빈 문자열을 돌려주면 여기서 즉시 OpenAI 폴백 1회
+        if (!text || !String(text).trim()) {
+          const t = await callOpenAIOnce({ userText: content });
+          return t || "";
         }
         return text;
+      } catch (e) {
+        ctx.diagnostics.last = { type: "llm-fallback", from: "gemini", to: "openai", message: String(e?.message || e) };
+        const t = await callOpenAIOnce({ userText: content });
+        return t || "";
       }
     }
   }
 
+  function synthesizePrompt() {
+    // 완전 빈 응답일 때 안전한 기본 프롬프트 구성
+    return [
+      "You are a senior full-stack engineer acting as an autonomous code agent.",
+      "Follow these guardrails strictly:",
+      systemGuard,
+      "",
+      "[Task]",
+      ctx.userDemand || "No explicit task text was provided. Propose a minimal safe change within allowed paths.",
+      "",
+      "[Deliverables]",
+      "- A short plan",
+      "- File-by-file changes",
+      "- Safety checklist",
+      "- (If allowed) exact commands or edits"
+    ].join("\n");
+  }
+
+  function normalizeAgentPrompt(text) {
+    const trimmed = (text || "").trim();
+    if (trimmed) return trimmed;
+    // ❷ 최종 안전 보정: 완전 빈값이면 합성 프롬프트로 대체
+    return synthesizePrompt();
+  }
+
   ctx.agentPrompt = await genPrompt();
+  ctx.agentPrompt = normalizeAgentPrompt(ctx.agentPrompt);
   for (const h of hooks.afterLLM) await h(ctx);
 
   if (ctx.tokenFlags?.dryRun) return { dryRun: true, ctx };
   if (ctx.agent === "none" || ctx.planOnly) return { planOnly: true, ctx };
 
   function checkpointCommit(msg){
-    try { execSync(`git add -A`, { stdio: "inherit" }); execSync(`git commit -m ${JSON.stringify(msg)}`, { stdio: "inherit" }); }
-    catch { console.log("No changes to commit for checkpoint."); }
+    try {
+      execSync(`git add -A`, { stdio: "inherit" });
+      execSync(`git commit -m ${JSON.stringify(msg)}`, { stdio: "inherit" });
+    } catch {
+      console.log("No changes to commit for checkpoint.");
+    }
   }
 
   execSync(`git config user.name "github-actions[bot]"`, { stdio: "inherit" });
@@ -139,7 +176,6 @@ export async function runOrchestrator({ repoRoot, configPath, eventPath }) {
   ctx.branch = branch;
   execSync(`git checkout -b ${branch}`, { stdio: "inherit" });
 
-  // 보장된 출력 디렉터리 (.github/auto 또는 AUTO_OUT_DIR)
   const outDir = process.env.AUTO_OUT_DIR
     ? path.resolve(process.env.AUTO_OUT_DIR)
     : path.join(repoRoot, ".github", "auto");
@@ -150,8 +186,9 @@ export async function runOrchestrator({ repoRoot, configPath, eventPath }) {
   async function runOneStep(step) {
     for (const h of hooks.beforeAgent) await h(ctx);
     try {
-      if (ctx.agent === "claude") await runWithClaude(ctx.agentPrompt, tools, policy);
-      else await runWithCursor(ctx.agentPrompt, tools, policy);
+      const promptForAgent = normalizeAgentPrompt(ctx.agentPrompt); // ❸ 에이전트 호출 직전에도 한 번 더 보정
+      if (ctx.agent === "claude") await runWithClaude(promptForAgent, tools, policy);
+      else await runWithCursor(promptForAgent, tools, policy);
     } catch(e) {
       console.log("[Agent error]", e.message);
       ctx.diagnostics.last = { type: "agent-error", message: e.message };
@@ -169,10 +206,6 @@ export async function runOrchestrator({ repoRoot, configPath, eventPath }) {
       if (existsSync(cancelPath)) break;
       if ((Date.now()-start) > maxMs) break;
       await runOneStep(step);
-      // 빈 프롬프트 방지: 다음 스텝 입력이 비면 보정
-      if (!ctx.agentPrompt || typeof ctx.agentPrompt !== "string" || !ctx.agentPrompt.trim()) {
-        ctx.agentPrompt = "Continue.";
-      }
     }
   } else {
     await runOneStep(1);
@@ -183,7 +216,6 @@ export async function runOrchestrator({ repoRoot, configPath, eventPath }) {
   const tokenList = (ctx.tokens||[]).join(", ") || "(none)";
   const labelList = labels.join(", ") || "(none)";
   const truncatedUserDemand = (ctx.userDemand || "").slice(0, 2000);
-  const agentSnippet = (ctx.agentPrompt || "").slice(0, 500); // ✅ PR 본문에 agentPrompt 일부 포함
   const costLine = `OpenAI usage: in=${ctx.usageTotals.openai.input} out=${ctx.usageTotals.openai.output}`;
 
   const infoMd = [
@@ -201,14 +233,7 @@ export async function runOrchestrator({ repoRoot, configPath, eventPath }) {
     "```",
     truncatedUserDemand,
     "```",
-    "",
-    "## Agent Prompt (snippet)",
-    "",
-    "```",
-    agentSnippet,
-    "```",
-    "",
-    ctx.longMode ? `> Long-run: budget ${ctx.budgetMinutes} min / ${ctx.budgetSteps} steps.` : ""
+    ""
   ].join("\n");
 
   const promptMd = [
@@ -221,7 +246,7 @@ export async function runOrchestrator({ repoRoot, configPath, eventPath }) {
     "## Last Agent Prompt",
     "",
     "```",
-    ctx.agentPrompt,
+    normalizeAgentPrompt(ctx.agentPrompt),
     "```"
   ].join("\n");
 
@@ -230,18 +255,15 @@ export async function runOrchestrator({ repoRoot, configPath, eventPath }) {
   writeFileSync(prBodyPath, infoMd, "utf8");
   writeFileSync(promptBodyPath, promptMd, "utf8");
 
-  // PR 생성
   const title = `auto: ${ctx.branch} [${ctx.llm}/${ctx.agent}] (tokens: ${tokenList})`;
   execSync(
     `gh pr create --title ${JSON.stringify(title)} --body-file ${JSON.stringify(prBodyPath)} --base main --head ${ctx.branch}`,
     { stdio: "inherit" }
   );
 
-  // 🔧 안전한 PR 번호 조회(gh pr view --head 미사용)
   const prNumber = execSync(
     `gh pr list -s all --head ${ctx.branch} --json number --jq '.[0].number // empty'`
   ).toString().trim();
-
   ctx.prNumber = prNumber || null;
 
   if (prNumber) {
