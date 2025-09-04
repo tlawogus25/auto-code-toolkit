@@ -28,7 +28,10 @@ export async function runGemini({ client, model, user, maxAttempts = 3 }) {
         model,
         contents: [{ role: "user", parts: [{ text: user }]}],
       });
-      return { text: (r.response?.text() || ""), usage: null };
+      const txt = (r.response?.text() || "");
+      // ❶ 빈 텍스트를 성공으로 돌려보내지 않음 → 오케스트레이터 폴백 유도
+      if (!txt.trim()) throw new Error("Gemini returned empty text");
+      return { text: txt, usage: null };
     } catch (e) {
       lastErr = e;
       if (!isTransientGeminiError(e) || attempt >= maxAttempts) break;
