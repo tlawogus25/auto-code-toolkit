@@ -1,7 +1,9 @@
 {
   "labels": {
-    "run": "automation:run",
-    "highCost": "automation:high-cost"
+    "run": "automation:run",                
+    "autoMerge": "automation:auto-merge",   
+    "continue": "automation:continue",      
+    "highCost": "automation:high-cost"     
   },
   "plugins": [
     "./packages/plugins/basic-tokens",
@@ -30,7 +32,7 @@
     },
     "cursor": {
       "cli": "cursor-agent",
-      "force": true
+      "force": false
     }
   },
   "policy": {
