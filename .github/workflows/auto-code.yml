@@ -10,12 +10,10 @@ on:                                                                    # 트리�
         required: false
         type: string                                   # 수동 트리거
 
-
 permissions:                                                           # 권한
   contents: write                                                      # 콘텐츠 쓰기
   pull-requests: write                                                 # PR 쓰기
   issues: write                                                            # 이슈 읽기
-
 
 concurrency:                                                           # 동시성
   group: auto-code-${{ github.event.issue.number || github.event.pull_request.number || github.run_id }}
@@ -25,7 +23,6 @@ jobs:                                                                  # 잡
   run:                                                                 # 잡 이름
     runs-on: [self-hosted, macOS, ARM64]                               # 러너
     if: "github.event_name == 'workflow_dispatch' || (github.event_name == 'issues' && contains(github.event.issue.labels.*.name, 'automation:run') && startsWith(github.event.issue.body, '/auto')) || (github.event_name == 'issue_comment' && contains(github.event.issue.labels.*.name, 'automation:run') && startsWith(github.event.comment.body, '/auto'))"                     # 조건
-
     steps:                                                              # 스텝
       - name: Checkout (default branch, deep, clean)                    # 체크아웃
         uses: actions/checkout@v4                                       # 액션
@@ -94,8 +91,8 @@ jobs:                                                                  # 잡
           AUTO_INPUT_BODY: ${{ env.AUTO_INPUT_BODY }}   # ← 오케스트레이터에서 읽게 함
         with:                                                           # 입력
           config-path: config/toolkit.config.json                       # 설정 경로
-          upload-artifacts: 'true'                                      # 아티팩트 업로드
-
+          upload-artifacts: 'false'                                      # 아티팩트 업로드
+          
       - name: Upload stage/run meta logs                                 # ★ 스테이지/메타 아티팩트 보장
         if: always()                                                     # 항상 실행
         uses: actions/upload-artifact@v4                                 # 업로드 액션
@@ -108,8 +105,25 @@ jobs:                                                                  # 잡
           if-no-files-found: ignore                                       # 없으면 무시
       
       - name: Cleanup label (prevent re-trigger)
-        if: always() && (github.event_name == 'issues' || github.event_name == 'issue_comment') && contains(github.event.issue.labels.*.name, 'automation:run')
-        uses: actions-ecosystem/action-remove-labels@v1
+        if: always() && (github.event_name == 'issues' || github.event_name == 'issue_comment')
+        uses: actions/github-script@v7
         with:
-          github_token: ${{ github.token }}
-          labels: automation:run
+          script: |
+            const { owner, repo } = context.repo;
+            const issue_number = context.payload.issue?.number;
+            if (!issue_number) { core.info('No issue in payload; skip'); return; }
+            try {
+              const labels = await github.paginate(
+                github.rest.issues.listLabelsOnIssue,
+                { owner, repo, issue_number, per_page: 100 }
+              );
+              const has = labels.some(l => l.name === 'automation:run');
+              if (has) {
+                await github.rest.issues.removeLabel({ owner, repo, issue_number, name: 'automation:run' });
+                core.info('Removed label automation:run');
+              } else {
+                core.info('Label not present; nothing to remove');
+              }
+            } catch (e) {
+              core.warning('Ignoring label cleanup error: ' + (e.message || e));
+            }
