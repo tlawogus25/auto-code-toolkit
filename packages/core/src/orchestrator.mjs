@@ -10,8 +10,8 @@ import { loadPlugins } from "./tokens/registry.mjs";                            
 import { pickLLMAndAgent } from "./router.mjs";                                        // LLM/에이전트 라우팅
 import { makeOpenAI, runOpenAI } from "./llm/openai.mjs";                              // OpenAI 어댑터
 import { makeGemini, runGemini } from "./llm/gemini.mjs";                              // Gemini 어댑터
-import { runWithClaude } from "./agents/claude.mjs";                                    // Claude 실행기
-import { runWithCursor } from "./agents/cursor.mjs";                                    // Cursor 실행기
+import { runWithClaude } from "./agents/claude.mjs";                                   // Claude 실행기
+import { runWithCursor } from "./agents/cursor.mjs";                                   // Cursor 실행기
 
 function nowIso(){ return new Date().toISOString(); }                                  // ISO 타임스탬프 유틸
 
@@ -23,17 +23,41 @@ export async function runOrchestrator({ repoRoot, configPath, eventPath }) {    
   const pluginsPaths = cfg.plugins || [];                                              // 플러그인 경로
   const pipeline = cfg.pipeline || { commands: {} };                                   // 파이프라인 훅
 
-  const evt = JSON.parse(readFileSync(eventPath, "utf8"));                             // GitHub 이벤트 JSON
+  // 이벤트 로드(없거나 파싱 실패 시 빈 객체로)
+  let evt = {};
+  try { evt = JSON.parse(readFileSync(eventPath, "utf8")); } catch {}
+
+  const eventName = process.env.GITHUB_EVENT_NAME || "";                               // 이벤트명
   const isIssue = !!evt.issue && !evt.comment;                                         // 이슈 이벤트 여부
-  const rawBody = (isIssue ? (evt.issue.body || "") : (evt.comment.body || "")).trim();// 원문(/auto 포함)
-  const labels = (evt.issue?.labels || []).map(l => l.name || "");                     // 라벨 목록
-  const sourceIssueNumber = evt?.issue?.number || null;                                // ★ 원 이슈 번호 확보
+  const isDispatch = eventName === "workflow_dispatch";                                 // 디스패치 여부
 
-  if (!rawBody.startsWith("/auto")) return { skipped: true };                          // /auto 아니면 스킵
-  if (!labels.includes(labelsCfg.run || "automation:run")) return { skipped: true };   // 트리거 라벨 필수
+  // 본문(/auto 포함) 안전 추출: 이벤트별로 경로가 다름 + 디스패치 입력/ENV 폴백
+  const dispatchBody = (evt?.inputs?.body ?? process.env.AUTO_INPUT_BODY ?? "");
+  const issueBody    = (evt?.issue?.body ?? "");
+  const commentBody  = (evt?.comment?.body ?? "");
+  const rawBody = (isDispatch ? dispatchBody : (isIssue ? issueBody : commentBody)).trim();
 
-  const { tokens, hooks } = await loadPlugins(pluginsPaths, repoRoot);                 // 토큰/훅 로드
-  const after = rawBody.replace(/^\/auto\s*/i, "");                                     // /auto 접두 제거
+  // 라벨: 이슈 컨텍스트가 있을 때만
+  const labels = (evt.issue?.labels || []).map(l => l?.name || "");
+
+  // 원 이슈 번호(있으면)
+  const sourceIssueNumber = evt?.issue?.number || null;
+
+  // 트리거 가드: /auto 필수(없으면 조용히 종료)
+  if (!rawBody || !rawBody.startsWith("/auto")) return { skipped: true };
+
+  // 라벨 가드: 이슈/댓글 이벤트에만 적용(디스패치는 라벨 없이 허용)
+  if (!isDispatch) {
+    if (!labels.includes(labelsCfg.run || "automation:run")) return { skipped: true };
+  }
+
+  const { tokens, hooks: rawHooks } = await loadPlugins(pluginsPaths, repoRoot);       // 토큰/훅 로드
+  const hooks = {
+    beforeLLM: [], afterLLM: [], beforeAgent: [], afterAgent: [], beforePR: [], afterPR: [],
+    ...(rawHooks || {}),
+  };
+
+  const after = rawBody.replace(/^\/auto\s*/i, "");                                    // /auto 접두 제거
   const m = after.match(/^((?:[\w:-]+)\b\s*)+/i) || [""];                              // 토큰 시퀀스 추출
   const seq = (m[0] || "").trim().split(/\s+/).filter(Boolean);                       // 토큰 배열
   const rest = after.slice((m[0]||"").length).trim();                                  // 사용자 요구 본문
@@ -61,54 +85,67 @@ export async function runOrchestrator({ repoRoot, configPath, eventPath }) {    
   const runMetaPath  = path.join(outDir, "run-meta.json");                            // 런 메타 경로
 
   // ★ 스테이지 로그 헬퍼: {stage, ok, details, ts} 배열로 누적 기록
-  function appendStage(stage, ok, details){                                           // 단계 로깅 함수
-    let arr = [];                                                                     // 초기 배열
-    try { arr = JSON.parse(fs.readFileSync(stageLogPath, "utf8")); } catch {}         // 기존 로그 로드
-    arr.push({ stage, ok: !!ok, details: details ?? null, ts: nowIso() });            // 새 항목 추가
-    fs.writeFileSync(stageLogPath, JSON.stringify(arr, null, 2), "utf8");             // 파일 저장
+  function appendStage(stage, ok, details){
+    let arr = [];
+    try { arr = JSON.parse(fs.readFileSync(stageLogPath, "utf8")); } catch {}
+    arr.push({ stage, ok: !!ok, details: details ?? null, ts: nowIso() });
+    fs.writeFileSync(stageLogPath, JSON.stringify(arr, null, 2), "utf8");
   }
 
   // ★ 런 메타 기록: 트리거/출발점/소스 이슈/선택 LLM/모드 등 요약
-  function writeRunMeta(extra){                                                       // 메타 쓰기 함수
-    const base = {                                                                    // 기본 필드
-      startedAt: ctx.loopSummary.startedAt,                                           // 시작 시각
-      event: evt.action || "n/a",                                                     // 이벤트 액션
-      source: isIssue ? "issue" : "comment",                                          // 소스 타입
-      sourceIssueNumber: sourceIssueNumber,                                           // 원 이슈 번호
-      tokens: ctx.tokens,                                                             // /auto 토큰들
-      planOnly: ctx.planOnly,                                                         // 플랜 전용 여부
-      longMode: ctx.longMode,                                                         // 장시간 모드 여부
-      llm: ctx.llm, model: ctx.model, agent: ctx.agent,                               // 선택 체인
-      branch: ctx.branch, prNumber: ctx.prNumber                                      // 브랜치/PR
-    };                                                                                // base 끝
-    fs.writeFileSync(runMetaPath, JSON.stringify({ ...base, ...(extra||{}) }, null, 2),"utf8"); // 저장
+  function writeRunMeta(extra){
+    const base = {
+      startedAt: ctx.loopSummary.startedAt,
+      event: evt.action || eventName || "n/a",
+      source: isIssue ? "issue" : (isDispatch ? "dispatch" : "comment"),
+      sourceIssueNumber: sourceIssueNumber,
+      tokens: ctx.tokens,
+      planOnly: ctx.planOnly,
+      longMode: ctx.longMode,
+      llm: ctx.llm, model: ctx.model, agent: ctx.agent,
+      branch: ctx.branch, prNumber: ctx.prNumber
+    };
+    fs.writeFileSync(runMetaPath, JSON.stringify({ ...base, ...(extra||{}) }, null, 2), "utf8");
   }
 
-  appendStage("bootstrap", true, { hasAuto: true, hasRunLabel: true });               // 부트스트랩 기록
-  writeRunMeta();                                                                      // 초기 메타 저장
+  appendStage("bootstrap", true, {
+    hasAuto: true,
+    hasRunLabel: isDispatch ? "n/a(dispatch)" : labels.includes(labelsCfg.run || "automation:run")
+  });
+  writeRunMeta();
 
-  for (const t of seq) { const h = tokens.get(t.toLowerCase()); if (h) await h(ctx); } // 토큰 핸들러
+  // /auto 토큰 핸들러 실행
+  for (const t of seq) {
+    const h = tokens.get(t.toLowerCase());
+    if (h) await h(ctx);
+  }
 
-  const highCost = labels.includes(labelsCfg.highCost || "automation:high-cost");     // 고비용 라벨
-  const max = policy.hard_stop_chars_without_high_cost_label ?? 20000;                // 입력 상한
-  const planThreshold = policy.plan_only_threshold_chars ?? 8000;                     // 플랜 상한
-  if (!(ctx.tokenFlags?.force && highCost)) {                                         // 강제+고비용 제외
-    if (ctx.userDemand.length > max && !highCost) {                                   // 상한 초과
-      appendStage("guard:input-too-long", false, { len: ctx.userDemand.length });     // 스테이지 기록
-      throw new Error("Input too long without high-cost label.");                     // 예외
+  // 입력 길이 가드
+  const highCost = labels.includes(labelsCfg.highCost || "automation:high-cost");
+  const max = policy.hard_stop_chars_without_high_cost_label ?? 20000;
+  const planThreshold = policy.plan_only_threshold_chars ?? 8000;
+  if (!(ctx.tokenFlags?.force && highCost)) {
+    if (ctx.userDemand.length > max && !highCost) {
+      appendStage("guard:input-too-long", false, { len: ctx.userDemand.length });
+      throw new Error("Input too long without high-cost label.");
     }
   }
-  ctx.planOnly = ctx.planOnly || (ctx.userDemand.length > planThreshold && !highCost);// 플랜 모드 전환
-  appendStage("route:pre", true, { planOnly: ctx.planOnly });                          // 라우트 전 기록
+  ctx.planOnly = ctx.planOnly || (ctx.userDemand.length > planThreshold && !highCost);
+  appendStage("route:pre", true, { planOnly: ctx.planOnly });
 
-  const route = pickLLMAndAgent({ userDemand: ctx.userDemand, planOnly: ctx.planOnly, tools, preferFast: ctx.preferFast }); // 라우팅
-  ctx.llm = route.llm; ctx.model = route.model; ctx.agent = route.agent;              // 선택 적용
-  appendStage("route:selected", true, { llm: ctx.llm, model: ctx.model, agent: ctx.agent }); // 라우팅 결과 기록
+  const route = pickLLMAndAgent({
+    userDemand: ctx.userDemand,
+    planOnly: ctx.planOnly,
+    tools,
+    preferFast: ctx.preferFast
+  });
+  ctx.llm = route.llm; ctx.model = route.model; ctx.agent = route.agent;
+  appendStage("route:selected", true, { llm: ctx.llm, model: ctx.model, agent: ctx.agent });
 
-  for (const h of hooks.beforeLLM) await h(ctx);                                      // LLM 전 훅
-  appendStage("hooks:beforeLLM", true, null);                                         // 스테이지 기록
+  for (const h of (hooks.beforeLLM || [])) await h(ctx);
+  appendStage("hooks:beforeLLM", true, null);
 
-  const systemGuard = [                                                               // 에이전트 가드 문구
+  const systemGuard = [
     "[에이전트 가드레일]",
     `- 허용 경로: ${(policy.allowed_globs||["src/**","app/**","docs/**"]).join(", ")}`,
     `- 금지 경로: ${(policy.forbidden_globs||[".env*","secrets/**",".git/**"]).join(", ")}`,
@@ -117,223 +154,224 @@ export async function runOrchestrator({ repoRoot, configPath, eventPath }) {    
     "- 변경은 설명 가능한 작은 커밋 단위 권장",
     "- 절대 쉘/Bash 명령을 실행하지 말 것(파일 편집/패치만 수행)",
     "- 존재하지 않는 디렉터리는 패치 내에서 생성 후 파일을 추가"
-  ].join("\n");                                                                       // 조합
+  ].join("\n");
 
-  const content = [                                                                   // LLM 사용자 입력
+  const content = [
     systemGuard, "\n[사용자 요구]", ctx.userDemand, "\n[원하는 산출물]",
     "- 변경 개요(목록)", "- 파일별 수정 계획", "- 안전 체크리스트",
     ctx.planOnly ? "- (플랜 전용: 실행명령 생략)" : "- 최종 실행할 수정 단계"
-  ].join("\n");                                                                       // 조합
+  ].join("\n");
 
-  async function callOpenAIOnce({ userText }) {                                       // OpenAI 단발 폴백
-    const fallbackModel = (ctx.tools?.openai?.default) || "gpt-4o-mini";              // 폴백 모델
-    const { text, usage } = await runOpenAI({                                         // 호출
-      client: makeOpenAI(process.env.OPENAI_API_KEY),                                 // 클라이언트
-      model: fallbackModel,                                                           // 모델
-      system: systemGuard,                                                            // 시스템 프롬프트
-      user: userText,                                                                 // 유저 텍스트
-      reasoning: { effort: ctx.planOnly ? "medium" : "high" }                         // 추론 강도
+  async function callOpenAIOnce({ userText }) {
+    const fallbackModel = (ctx.tools?.openai?.default) || "gpt-4o-mini";
+    const { text, usage } = await runOpenAI({
+      client: makeOpenAI(process.env.OPENAI_API_KEY),
+      model: fallbackModel,
+      system: systemGuard,
+      user: userText,
+      reasoning: { effort: ctx.planOnly ? "medium" : "high" }
     });
-    if (usage) {                                                                      // 사용량 집계
-      ctx.usageTotals.openai.input += (usage.input_tokens||0);                        // 입력 토큰
-      ctx.usageTotals.openai.output += (usage.output_tokens||0);                      // 출력 토큰
+    if (usage) {
+      ctx.usageTotals.openai.input += (usage.input_tokens||0);
+      ctx.usageTotals.openai.output += (usage.output_tokens||0);
     }
-    return text || "";                                                                // 텍스트 반환
+    return text || "";
   }
 
-  async function genPrompt(){                                                         // 프롬프트 생성
-    try {                                                                             // 예외 처리 래핑
-      if (ctx.llm === "openai") {                                                     // OpenAI 경로
-        const { text, usage } = await runOpenAI({                                     // 호출
-          client: makeOpenAI(process.env.OPENAI_API_KEY),                             // 클라이언트
-          model: ctx.model, system: systemGuard, user: content,                       // 파라미터
-          reasoning: { effort: ctx.planOnly ? "medium" : "high" }                     // 추론 강도
+  async function genPrompt(){
+    try {
+      if (ctx.llm === "openai") {
+        const { text, usage } = await runOpenAI({
+          client: makeOpenAI(process.env.OPENAI_API_KEY),
+          model: ctx.model, system: systemGuard, user: content,
+          reasoning: { effort: ctx.planOnly ? "medium" : "high" }
         });
-        if (usage) {                                                                  // 집계
-          ctx.usageTotals.openai.input += (usage.input_tokens||0);                    // 입력
-          ctx.usageTotals.openai.output += (usage.output_tokens||0);                  // 출력
+        if (usage) {
+          ctx.usageTotals.openai.input += (usage.input_tokens||0);
+          ctx.usageTotals.openai.output += (usage.output_tokens||0);
         }
-        appendStage("llm:openai", true, { model: ctx.model });                        // 스테이지 기록
-        return text || "";                                                            // 프롬프트 반환
-      } else {                                                                         // Gemini 경로
-        const { text } = await runGemini({                                            // 호출
-          client: makeGemini(process.env.GEMINI_API_KEY),                             // 클라이언트
-          model: ctx.model, user: content                                            // 입력
+        appendStage("llm:openai", true, { model: ctx.model });
+        return text || "";
+      } else {
+        const { text } = await runGemini({
+          client: makeGemini(process.env.GEMINI_API_KEY),
+          model: ctx.model, user: content
         });
-        if (!text || !String(text).trim()) {                                          // 빈 응답
-          appendStage("llm:gemini-empty", false, null);                                // 기록
-          const t = await callOpenAIOnce({ userText: content });                      // OpenAI 폴백
-          appendStage("llm:fallback-openai", !!t, { used: "openai:single" });         // 기록
-          return t || "";                                                             // 반환
+        if (!text || !String(text).trim()) {
+          appendStage("llm:gemini-empty", false, null);
+          const t = await callOpenAIOnce({ userText: content });
+          appendStage("llm:fallback-openai", !!t, { used: "openai:single" });
+          return t || "";
         }
-        appendStage("llm:gemini", true, { model: ctx.model });                        // 기록
-        return text;                                                                  // 텍스트 반환
+        appendStage("llm:gemini", true, { model: ctx.model });
+        return text;
       }
-    } catch (e) {                                                                      // 예외
-      appendStage("llm:error", false, { message: String(e?.message || e) });          // 에러 기록
-      const t = await callOpenAIOnce({ userText: content });                          // OpenAI 폴백
-      appendStage("llm:fallback-openai", !!t, { used: "openai:on-error" });           // 기록
-      return t || "";                                                                 // 반환
+    } catch (e) {
+      appendStage("llm:error", false, { message: String(e?.message || e) });
+      const t = await callOpenAIOnce({ userText: content });
+      appendStage("llm:fallback-openai", !!t, { used: "openai:on-error" });
+      return t || "";
     }
   }
 
-  function synthesizePrompt() {                                                       // 빈값 대비 합성
+  function synthesizePrompt() {
     return [
       "You are a senior full-stack engineer acting as an autonomous code agent.",
       "Follow these guardrails strictly:",
       systemGuard, "",
       "[Task]", ctx.userDemand || "No explicit task text was provided. Propose a minimal safe change within allowed paths.", "",
       "[Deliverables]", "- A short plan", "- File-by-file changes", "- Safety checklist", "- (If allowed) exact commands or edits"
-    ].join("\n");                                                                      // 조합
+    ].join("\n");
   }
 
-  function normalizeAgentPrompt(text) {                                               // 빈 프롬프트 보정
-    const trimmed = (text || "").trim();                                              // 트림
-    return trimmed || synthesizePrompt();                                             // 비면 합성으로 대체
+  function normalizeAgentPrompt(text) {
+    const trimmed = (text || "").trim();
+    return trimmed || synthesizePrompt();
   }
 
-  ctx.agentPrompt = normalizeAgentPrompt(await genPrompt());                           // 프롬프트 생성/보정
-  appendStage("llm:prompt-ready", true, { length: ctx.agentPrompt.length });          // 프롬프트 준비 기록
-  for (const h of hooks.afterLLM) await h(ctx);                                       // LLM 후 훅
-  appendStage("hooks:afterLLM", true, null);                                          // 스테이지 기록
+  ctx.agentPrompt = normalizeAgentPrompt(await genPrompt());
+  appendStage("llm:prompt-ready", true, { length: ctx.agentPrompt.length });
+  for (const h of (hooks.afterLLM || [])) await h(ctx);
+  appendStage("hooks:afterLLM", true, null);
 
-  if (ctx.tokenFlags?.dryRun) { writeRunMeta({ dryRun: true }); return { dryRun: true, ctx }; } // 드라이런 종료
-  if (ctx.agent === "none" || ctx.planOnly) { writeRunMeta({ planOnly: ctx.planOnly }); return { planOnly: true, ctx }; } // 플랜 전용 종료
+  if (ctx.tokenFlags?.dryRun) { writeRunMeta({ dryRun: true }); return { dryRun: true, ctx }; }
+  if (ctx.agent === "none" || ctx.planOnly) { writeRunMeta({ planOnly: ctx.planOnly }); return { planOnly: true, ctx }; }
+
 // orchestrator.mjs                                                                    // 파일 동일
 // Part 2/2: 에이전트 실행·체크포인트·PR 생성·메타/스테이지 기록                       // 파트 개요
 
-  function checkpointCommit(msg){                                                     // 체크포인트 커밋
-    try { execSync(`git add -A`, { stdio: "inherit" }); } catch {}                    // 전체 스테이징
-    try { execSync(`git commit -m ${JSON.stringify(msg)}`, { stdio: "inherit" }); }   // 메시지 커밋
-    catch { console.log("No changes to commit for checkpoint."); }                    // 변경 없음 안내
+  function checkpointCommit(msg){
+    try { execSync(`git add -A`, { stdio: "inherit" }); } catch {}
+    try { execSync(`git commit -m ${JSON.stringify(msg)}`, { stdio: "inherit" }); }
+    catch { console.log("No changes to commit for checkpoint."); }
   }
 
-  execSync(`git config user.name "github-actions[bot]"`, { stdio: "inherit" });       // 커밋 사용자명
-  execSync(`git config user.email "github-actions[bot]@users.noreply.github.com"`, { stdio: "inherit" }); // 이메일
-  const branch = `auto/${Date.now()}`;                                                // 작업 브랜치명
-  ctx.branch = branch;                                                                 // 컨텍스트 저장
-  execSync(`git checkout -b ${branch}`, { stdio: "inherit" });                        // 브랜치 생성/전환
-  appendStage("git:branch", true, { branch });                                         // 스테이지 기록
-  writeRunMeta();                                                                       // 브랜치 반영 저장
+  execSync(`git config user.name "github-actions[bot]"`, { stdio: "inherit" });
+  execSync(`git config user.email "github-actions[bot]@users.noreply.github.com"`, { stdio: "inherit" });
+  const branch = `auto/${Date.now()}`;
+  ctx.branch = branch;
+  execSync(`git checkout -b ${branch}`, { stdio: "inherit" });
+  appendStage("git:branch", true, { branch });
+  writeRunMeta();
 
-  const cancelPath = path.join(outDir, "CANCEL");                                      // 취소 플래그 경로
-  const start = Date.now();                                                            // 시작 시각
+  const cancelPath = path.join(outDir, "CANCEL");
+  const start = Date.now();
 
-  async function runAgentWithFallback(promptText, tools, policy) {                     // 에이전트 실행기
-    const primary = (ctx.agent || "").toLowerCase();                                   // 주 에이전트
-    const fallback = primary === "claude" ? "cursor" : "claude";                       // 폴백 에이전트
-    try {                                                                              // 1차 시도
-      const safePrompt = normalizeAgentPrompt(promptText);                             // 안전 프롬프트
-      if (primary === "claude") await runWithClaude(safePrompt, tools, policy);        // Claude 실행
-      else await runWithCursor(safePrompt, tools, policy);                             // Cursor 실행
-      appendStage("agent:primary", true, { used: primary });                           // 성공 기록
-      return { ok: true, used: primary };                                              // 결과
-    } catch (e1) {                                                                      // 1차 실패
-      appendStage("agent:primary", false, { used: primary, error: String(e1?.message||e1) }); // 실패 기록
-      try {                                                                            // 폴백 시도
-        const safePrompt2 = normalizeAgentPrompt(promptText);                          // 프롬프트 재사용
-        if (fallback === "claude") await runWithClaude(safePrompt2, tools, policy);    // Claude 폴백
-        else await runWithCursor(safePrompt2, tools, policy);                          // Cursor 폴백
-        appendStage("agent:fallback", true, { chain: `${primary}->${fallback}` });     // 폴백 성공 기록
-        return { ok: true, used: `${primary}->${fallback}` };                          // 결과
-      } catch (e2) {                                                                    // 폴백 실패
-        appendStage("agent:fallback", false, { chain: `${primary}->${fallback}`, error: String(e2?.message||e2) }); // 실패 기록
-        return { ok: false, used: `${primary}->${fallback}` };                         // 최종 실패
+  async function runAgentWithFallback(promptText, tools, policy) {
+    const primary = (ctx.agent || "").toLowerCase();
+    const fallback = primary === "claude" ? "cursor" : "claude";
+    try {
+      const safePrompt = normalizeAgentPrompt(promptText);
+      if (primary === "claude") await runWithClaude(safePrompt, tools, policy);
+      else await runWithCursor(safePrompt, tools, policy);
+      appendStage("agent:primary", true, { used: primary });
+      return { ok: true, used: primary };
+    } catch (e1) {
+      appendStage("agent:primary", false, { used: primary, error: String(e1?.message||e1) });
+      try {
+        const safePrompt2 = normalizeAgentPrompt(promptText);
+        if (fallback === "claude") await runWithClaude(safePrompt2, tools, policy);
+        else await runWithCursor(safePrompt2, tools, policy);
+        appendStage("agent:fallback", true, { chain: `${primary}->${fallback}` });
+        return { ok: true, used: `${primary}->${fallback}` };
+      } catch (e2) {
+        appendStage("agent:fallback", false, { chain: `${primary}->${fallback}`, error: String(e2?.message||e2) });
+        return { ok: false, used: `${primary}->${fallback}` };
       }
     }
   }
 
-  async function runOneStep(step) {                                                    // 스텝 실행기
-    for (const h of hooks.beforeAgent) await h(ctx);                                   // 에이전트 전 훅
-    appendStage("hooks:beforeAgent", true, { step });                                   // 기록
-    const result = await runAgentWithFallback(ctx.agentPrompt, tools, policy);         // 에이전트+폴백
-    for (const h of hooks.afterAgent) await h(ctx);                                    // 에이전트 후 훅
-    appendStage("hooks:afterAgent", true, { step, ok: result.ok });                     // 기록
-    checkpointCommit(`auto: checkpoint step ${step}`);                                  // 체크포인트 커밋
-    try { execSync(`git push origin ${branch}`, { stdio: "inherit" }); } catch {}      // 원격 푸시
-    appendStage("git:push", true, { step });                                            // 푸시 기록
-    ctx.loopSummary.steps.push({ step, at: nowIso(), agentUsed: result.used, ok: result.ok }); // 요약 누적
-    writeRunMeta({ loopSummary: ctx.loopSummary });                                     // 메타 갱신
-    const diagFile = path.join(outDir, "diagnostics-last.json");                        // 진단 파일 경로
-    writeFileSync(diagFile, JSON.stringify({ when: nowIso(), logs: [                   // 간단 진단
-      { stage: "agent", ok: !!result.ok, out: result.used }                             // 결과
-    ]}, null, 2), "utf8");                                                              // 저장
+  async function runOneStep(step) {
+    for (const h of (hooks.beforeAgent || [])) await h(ctx);
+    appendStage("hooks:beforeAgent", true, { step });
+    const result = await runAgentWithFallback(ctx.agentPrompt, tools, policy);
+    for (const h of (hooks.afterAgent || [])) await h(ctx);
+    appendStage("hooks:afterAgent", true, { step, ok: result.ok });
+    checkpointCommit(`auto: checkpoint step ${step}`);
+    try { execSync(`git push origin ${branch}`, { stdio: "inherit" }); } catch {}
+    appendStage("git:push", true, { step });
+    ctx.loopSummary.steps.push({ step, at: nowIso(), agentUsed: result.used, ok: result.ok });
+    writeRunMeta({ loopSummary: ctx.loopSummary });
+    const diagFile = path.join(outDir, "diagnostics-last.json");
+    writeFileSync(diagFile, JSON.stringify({
+      when: nowIso(),
+      logs: [{ stage: "agent", ok: !!result.ok, out: result.used }]
+    }, null, 2), "utf8");
   }
 
-  if (ctx.longMode) {                                                                   // 장시간 모드
-    const maxMs = (ctx.budgetMinutes||60) * 60 * 1000;                                  // 시간 예산
-    const maxSteps = ctx.budgetSteps || 3;                                              // 스텝 예산
-    for (let step=1; step<=maxSteps; step++) {                                          // 루프
-      if (existsSync(cancelPath)) { appendStage("long:cancel", true, null); break; }    // 취소 감지
-      if ((Date.now()-start) > maxMs) { appendStage("long:timeout", false, { maxMs }); break; } // 타임아웃
-      await runOneStep(step);                                                           // 스텝 실행
+  if (ctx.longMode) {
+    const maxMs = (ctx.budgetMinutes||60) * 60 * 1000;
+    const maxSteps = ctx.budgetSteps || 3;
+    for (let step=1; step<=maxSteps; step++) {
+      if (existsSync(cancelPath)) { appendStage("long:cancel", true, null); break; }
+      if ((Date.now()-start) > maxMs) { appendStage("long:timeout", false, { maxMs }); break; }
+      await runOneStep(step);
     }
-  } else {                                                                              // 단발 모드
-    await runOneStep(1);                                                                // 1회 실행
+  } else {
+    await runOneStep(1);
   }
 
-  for (const h of hooks.beforePR) await h(ctx);                                         // PR 전 훅
-  appendStage("hooks:beforePR", true, null);                                            // 기록
+  for (const h of (hooks.beforePR || [])) await h(ctx);
+  appendStage("hooks:beforePR", true, null);
 
-  const tokenList = (ctx.tokens||[]).join(", ") || "(none)";                            // 토큰 나열
-  const labelList = labels.join(", ") || "(none)";                                      // 라벨 나열
-  const truncatedUserDemand = (ctx.userDemand || "").slice(0, 2000);                    // 요구 트렁케이트
-  const costLine = `OpenAI usage: in=${ctx.usageTotals.openai.input} out=${ctx.usageTotals.openai.output}`; // 비용 요약
-  const sourceIssueLine = sourceIssueNumber ? `Source-Issue: #${sourceIssueNumber}` : "Source-Issue: n/a"; // ★ 원 이슈 라인
+  const tokenList = (ctx.tokens||[]).join(", ") || "(none)";
+  const labelList = labels.join(", ") || "(none)";
+  const truncatedUserDemand = (ctx.userDemand || "").slice(0, 2000);
+  const costLine = `OpenAI usage: in=${ctx.usageTotals.openai.input} out=${ctx.usageTotals.openai.output}`;
+  const sourceIssueLine = sourceIssueNumber ? `Source-Issue: #${sourceIssueNumber}` : "Source-Issue: n/a";
 
-  const infoMd = [                                                                      // PR 본문(요약)
-    `## Auto-run Info`,                                                                 // 제목
-    ``,                                                                                 // 공백
-    `- LLM: **${ctx.llm}** (${ctx.model})`,                                             // LLM
-    `- Agent: **${ctx.agent}**`,                                                        // 에이전트
-    `- Branch: ${ctx.branch}`,                                                          // 브랜치
-    `- Labels: ${labelList}`,                                                           // 라벨
-    `- Tokens: ${tokenList}`,                                                           // 토큰
-    `- ${costLine}`,                                                                    // 비용
-    `- ${sourceIssueLine}`,                                                             // ★ 원 이슈 참조
-    ``,                                                                                 // 공백
-    `## Prompt (truncated)`,                                                            // 섹션
-    "", "```", truncatedUserDemand, "```", ""                                           // 코드펜스
-  ].join("\n");                                                                         // 조합
+  const infoMd = [
+    `## Auto-run Info`,
+    ``,
+    `- LLM: **${ctx.llm}** (${ctx.model})`,
+    `- Agent: **${ctx.agent}**`,
+    `- Branch: ${ctx.branch}`,
+    `- Labels: ${labelList}`,
+    `- Tokens: ${tokenList}`,
+    `- ${costLine}`,
+    `- ${sourceIssueLine}`,
+    ``,
+    `## Prompt (truncated)`,
+    "", "```", truncatedUserDemand, "```", ""
+  ].join("\n");
 
-  const promptMd = [                                                                    // 프롬프트 코멘트
-    `# Original Prompt`, "", "```", ctx.userDemand, "```", "",                          // 원문
-    "## Last Agent Prompt", "", "```", (ctx.agentPrompt || "").trim(), "```"            // 최종 에이전트 프롬프트
-  ].join("\n");                                                                         // 조합
+  const promptMd = [
+    `# Original Prompt`, "", "```", ctx.userDemand, "```", "",
+    "## Last Agent Prompt", "", "```", (ctx.agentPrompt || "").trim(), "```"
+  ].join("\n");
 
-  const prBodyPath = path.join(outDir, `pr-body-${Date.now()}.md`);                     // 본문 파일
-  const promptBodyPath = path.join(outDir, `prompt-${Date.now()}.md`);                  // 코멘트 파일
-  writeFileSync(prBodyPath, infoMd, "utf8");                                            // 본문 저장
-  writeFileSync(promptBodyPath, promptMd, "utf8");                                      // 코멘트 저장
+  const prBodyPath = path.join(outDir, `pr-body-${Date.now()}.md`);
+  const promptBodyPath = path.join(outDir, `prompt-${Date.now()}.md`);
+  writeFileSync(prBodyPath, infoMd, "utf8");
+  writeFileSync(promptBodyPath, promptMd, "utf8");
 
-  const title = `auto: ${ctx.branch} [${ctx.llm}/${ctx.agent}] (tokens: ${tokenList})`; // PR 제목
-  execSync(                                                                              // gh PR 생성
+  const title = `auto: ${ctx.branch} [${ctx.llm}/${ctx.agent}] (tokens: ${tokenList})`;
+  execSync(
     `gh pr create --title ${JSON.stringify(title)} --body-file ${JSON.stringify(prBodyPath)} --base main --head ${ctx.branch}`,
-    { stdio: "inherit" }                                                                 // 표준 입출력
+    { stdio: "inherit" }
   );
-  appendStage("pr:create", true, { title });                                             // PR 생성 기록
+  appendStage("pr:create", true, { title });
 
-  const prNumber = execSync(                                                             // PR 번호 조회
-    `gh pr list -s all --head ${ctx.branch} --json number --jq '.[0].number // empty'`   // jq로 번호 추출
-  ).toString().trim();                                                                    // 문자열 변환
-  ctx.prNumber = prNumber || null;                                                        // 저장
-  writeRunMeta();                                                                          // 메타 갱신
-  appendStage("pr:number", !!ctx.prNumber, { prNumber: ctx.prNumber });                   // 번호 기록
+  const prNumber = execSync(
+    `gh pr list -s all --head ${ctx.branch} --json number --jq '.[0].number // empty'`
+  ).toString().trim();
+  ctx.prNumber = prNumber || null;
+  writeRunMeta();
+  appendStage("pr:number", !!ctx.prNumber, { prNumber: ctx.prNumber });
 
-  if (prNumber) {                                                                          // 번호 있으면
-    execSync(                                                                              // 프롬프트 코멘트 추가
+  if (prNumber) {
+    execSync(
       `gh pr comment ${prNumber} --body-file ${JSON.stringify(promptBodyPath)}`,
-      { stdio: "inherit" }                                                                 // 표준 입출력
+      { stdio: "inherit" }
     );
-    appendStage("pr:comment-prompt", true, { prNumber });                                   // 기록
+    appendStage("pr:comment-prompt", true, { prNumber });
   }
 
-  for (const h of hooks.afterPR) await h(ctx);                                             // PR 후 훅
-  appendStage("hooks:afterPR", true, null);                                                // 기록
+  for (const h of (hooks.afterPR || [])) await h(ctx);
+  appendStage("hooks:afterPR", true, null);
 
-  writeRunMeta({ finishedAt: nowIso() });                                                  // 종료 메타 저장
-  appendStage("done", true, { longMode: ctx.longMode });                                   // 완료 기록
+  writeRunMeta({ finishedAt: nowIso() });
+  appendStage("done", true, { longMode: ctx.longMode });
 
-  return { success: true, branch: ctx.branch, long: ctx.longMode, usage: ctx.usageTotals, prNumber: ctx.prNumber }; // 반환
-}                                                                                          // 함수 끝
-
+  return { success: true, branch: ctx.branch, long: ctx.longMode, usage: ctx.usageTotals, prNumber: ctx.prNumber };
+}

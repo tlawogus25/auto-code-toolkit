@@ -3,12 +3,17 @@ name: auto-code                                                        # 이름
 on:                                                                    # 트리거
   issues: { types: [opened, labeled] }
   issue_comment: { types: [created] }
-  workflow_dispatch:                                           # 수동 트리거
+  workflow_dispatch:        
+    inputs:
+      body:
+        description: "/auto 한 줄(옵션). 비워두면 오케스트레이터가 no-op로 종료"
+        required: false
+        type: string                                   # 수동 트리거
 
 permissions:                                                           # 권한
   contents: write                                                      # 콘텐츠 쓰기
   pull-requests: write                                                 # PR 쓰기
-  issues: read                                                         # 이슈 읽기
+  issues: write                                                            # 이슈 읽기
 
 concurrency:                                                           # 동시성
   group: auto-code-${{ github.event.issue.number || github.event.pull_request.number || github.run_id }}
@@ -39,36 +44,41 @@ jobs:                                                                  # 잡
       - name: "Preflight: required files (git object)"                  # 프리플라이트(깃 오브젝트)
         shell: bash                                                     # 셸
         run: |                                                          # 스크립트
-          set -euo pipefail                                            # 안전 옵션
-          files=(                                                      # 파일 리스트
-            "packages/core/src/index.mjs"                               # 필수1
-            "packages/core/src/orchestrator.mjs"                        # 필수2
-            "packages/core/src/llm/openai.mjs"                          # 필수3
-            "packages/core/src/llm/gemini.mjs"                          # 필수4
+          set -euo pipefail                                            
+          files=(                                                      
+            "packages/core/src/index.mjs"                               
+            "packages/core/src/orchestrator.mjs"                        
+            "packages/core/src/llm/openai.mjs"                          
+            "packages/core/src/llm/gemini.mjs"                         
           )
-          for f in "${files[@]}"; do                                    # 반복
-            if git show "HEAD:$f" >/dev/null 2>&1; then                 # 깃 오브젝트 확인
-              echo "OK (git): $f"                                       # 통과 메시지
-            else                                                        # 실패
-              echo "::error file=$f::missing in commit (git object)"    # 에러 로그
-              exit 1                                                    # 종료
-            fi                                                          # if 끝
-          done                                                          # for 끝
+          for f in "${files[@]}"; do                                    
+            if git show "HEAD:$f" >/dev/null 2>&1; then                 
+              echo "OK (git): $f"                                       
+            else                                                        
+              echo "::error file=$f::missing in commit (git object)"    
+              exit 1                                                    
+            fi                                                          
+          done                                                          
 
       - name: "Preflight: required files (workspace)"                   # ★ 이름 수정(중복 구분)
         shell: bash                                                     # 셸
         run: |                                                          # 스크립트
-          set -euo pipefail                                            # 안전 옵션
-          for f in packages/core/src/index.mjs packages/core/src/orchestrator.mjs packages/core/src/llm/openai.mjs packages/core/src/llm/gemini.mjs; do # 파일들
-            if [ -f "$f" ]; then                                        # 존재 확인
-              echo "OK (fs): $f"                                        # 통과
-              ls -l "$f"                                                # 상세
-              (command -v sha256sum >/dev/null && sha256sum "$f") || shasum -a 256 "$f" # 해시
-            else                                                        # 없으면
-              echo "::error file=$f::missing on disk (workspace)"       # 에러
-              exit 1                                                    # 종료
-            fi                                                          # if 끝
-          done                                                          # for 끝
+          set -euo pipefail                                            
+          for f in packages/core/src/index.mjs packages/core/src/orchestrator.mjs packages/core/src/llm/openai.mjs packages/core/src/llm/gemini.mjs; do 
+            if [ -f "$f" ]; then                                        
+              echo "OK (fs): $f"                                        
+              ls -l "$f"                                                
+              (command -v sha256sum >/dev/null && sha256sum "$f") || shasum -a 256 "$f" 
+            else                                                        
+              echo "::error file=$f::missing on disk (workspace)"       
+              exit 1                                                    
+            fi                                                          
+          done                                                          
+
+      - name: Export dispatch input as env (optional)
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        run: echo "AUTO_INPUT_BODY=${{ github.event.inputs.body }}" >> "$GITHUB_ENV"
 
       - name: Auto Code (Toolkit)                                       # 오토코드 실행
         uses: ./.github/actions/auto-code                               # 로컬 액션
@@ -78,6 +88,7 @@ jobs:                                                                  # 잡
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}                 # 시크릿
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}           # 시크릿
           CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}                 # 시크릿
+          AUTO_INPUT_BODY: ${{ env.AUTO_INPUT_BODY }}   # ← 오케스트레이터에서 읽게 함
         with:                                                           # 입력
           config-path: config/toolkit.config.json                       # 설정 경로
           upload-artifacts: 'true'                                      # 아티팩트 업로드
@@ -88,13 +99,13 @@ jobs:                                                                  # 잡
         with:                                                            # 입력
           name: auto-logs                                                # 아티팩트명
           path: |                                                        # 경로들
-            .github/auto/diagnostics-last.json                           # 진단 로그
-            .github/auto/stage-log.json                                  # ★ 스테이지 로그
-            .github/auto/run-meta.json                                   # ★ 런 메타
+            .github/auto/diagnostics-last.json                           
+            .github/auto/stage-log.json                                 
+            .github/auto/run-meta.json                                   
           if-no-files-found: ignore                                       # 없으면 무시
       
       - name: Cleanup label (prevent re-trigger)
-        if: always()
+        if: always() && (github.event_name == 'issues' || github.event_name == 'issue_comment') && contains(github.event.issue.labels.*.name, 'automation:run')
         uses: actions-ecosystem/action-remove-labels@v1
         with:
           github_token: ${{ github.token }}
