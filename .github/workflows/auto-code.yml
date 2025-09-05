@@ -1,11 +1,11 @@
 # auto-code.yml                                                        # 워크플로 파일명
 name: auto-code                                                        # 이름
 on:                                                                    # 트리거
-  issues:                                                              # 이슈 이벤트
-    types: [opened, edited, labeled]                                   # 타입
-  issue_comment:                                                       # 코멘트 이벤트
-    types: [created, edited]                                           # 타입
-  workflow_dispatch:                                                   # 수동 트리거
+  issues:
+    types: [opened, labeled]          # edited 제거 → 코멘트 기반 재실행은 댓글로
+  issue_comment:
+    types: [created]                  # edited 제거
+  workflow_dispatch:                                               # 수동 트리거
 
 permissions:                                                           # 권한
   contents: write                                                      # 콘텐츠 쓰기
@@ -13,8 +13,8 @@ permissions:                                                           # 권한
   issues: read                                                         # 이슈 읽기
 
 concurrency:                                                           # 동시성
-  group: auto-code-${{ github.ref || github.run_id }}                  # 그룹 키
-  cancel-in-progress: true                                             # 중복 취소
+  group: auto-code-${{ github.event.issue.number || github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true                                       # 중복 취소
 
 jobs:                                                                  # 잡
   run:                                                                 # 잡 이름
@@ -101,3 +101,10 @@ jobs:                                                                  # 잡
             .github/auto/stage-log.json                                  # ★ 스테이지 로그
             .github/auto/run-meta.json                                   # ★ 런 메타
           if-no-files-found: ignore                                       # 없으면 무시
+      
+      - name: Cleanup label (prevent re-trigger)
+        if: always()
+        uses: actions-ecosystem/action-remove-labels@v1
+        with:
+          github_token: ${{ github.token }}
+          labels: automation:run
