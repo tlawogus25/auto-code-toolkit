@@ -1,0 +1,17 @@
+name: zz-debug-issues
+on:
+  issues:        { types: [labeled] }
+  issue_comment: { types: [created] }
+permissions:
+  contents: read
+  issues: read
+jobs:
+  echo:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Print event summary
+        run: |
+          echo "EVENT: ${{ github.event_name }}"
+          echo "LABELS: ${{ toJson(github.event.issue.labels.*.name) }}"
+          echo "ISSUE_BEGINS_WITH_AUTO: ${{ startsWith(github.event.issue.body, '/auto') }}"
+          echo "COMMENT_BEGINS_WITH_AUTO: ${{ startsWith(github.event.comment.body, '/auto') }}"
