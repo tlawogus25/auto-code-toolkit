@@ -1,91 +1,103 @@
-name: auto-code
-on:
-  issues:
-    types: [opened, edited, labeled]
-  issue_comment:
-    types: [created, edited]
-  workflow_dispatch:
+# auto-code.yml                                                        # 워크플로 파일명
+name: auto-code                                                        # 이름
+on:                                                                    # 트리거
+  issues:                                                              # 이슈 이벤트
+    types: [opened, edited, labeled]                                   # 타입
+  issue_comment:                                                       # 코멘트 이벤트
+    types: [created, edited]                                           # 타입
+  workflow_dispatch:                                                   # 수동 트리거
 
-permissions:
-  contents: write
-  pull-requests: write
-  issues: read
+permissions:                                                           # 권한
+  contents: write                                                      # 콘텐츠 쓰기
+  pull-requests: write                                                 # PR 쓰기
+  issues: read                                                         # 이슈 읽기
 
-concurrency:
-  group: auto-code-${{ github.ref || github.run_id }}
-  cancel-in-progress: true
+concurrency:                                                           # 동시성
+  group: auto-code-${{ github.ref || github.run_id }}                  # 그룹 키
+  cancel-in-progress: true                                             # 중복 취소
 
-jobs:
-  run:
-    runs-on: [self-hosted, macOS, ARM64]
-    if: >
+jobs:                                                                  # 잡
+  run:                                                                 # 잡 이름
+    runs-on: [self-hosted, macOS, ARM64]                               # 러너
+    if: >                                                              
       (github.event_name == 'issues' &&
        contains(github.event.issue.labels.*.name, 'automation:run') &&
        startsWith(github.event.issue.body, '/auto')) ||
       (github.event_name == 'issue_comment' &&
        contains(github.event.issue.labels.*.name, 'automation:run') &&
        startsWith(github.event.comment.body, '/auto')) ||
-      (github.event_name == 'workflow_dispatch')
-    steps:
-      - name: Checkout (default branch, deep, clean)
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.repository.default_branch }}
-          fetch-depth: 0
-          clean: true
+      (github.event_name == 'workflow_dispatch')                       # 조건
+    steps:                                                              # 스텝
+      - name: Checkout (default branch, deep, clean)                    # 체크아웃
+        uses: actions/checkout@v4                                       # 액션
+        with:                                                           # 옵션
+          ref: ${{ github.event.repository.default_branch }}            # 기본 브랜치
+          fetch-depth: 0                                                # 전체 히스토리
+          clean: true                                                   # 깨끗하게
 
-      - name: Show HEADs (debug)
-        shell: bash
-        run: |
-          echo "local HEAD=$(git rev-parse HEAD)"
-          echo "remote HEAD=$(git ls-remote origin ${{ github.event.repository.default_branch }} | awk '{print $1}')"
+      - name: Show HEADs (debug)                                        # 디버그
+        shell: bash                                                     # 셸
+        run: |                                                          # 스크립트
+          echo "local HEAD=$(git rev-parse HEAD)"                       # 로컬 HEAD
+          echo "remote HEAD=$(git ls-remote origin ${{ github.event.repository.default_branch }} | awk '{print $1}')" # 원격 HEAD
 
-      - name: Ensure local bin on PATH
-        shell: bash
-        run: echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Ensure local bin on PATH                                  # PATH 보강
+        shell: bash                                                     # 셸
+        run: echo "$HOME/.local/bin" >> "$GITHUB_PATH"                  # 경로 추가
 
-      - name: "Preflight: required files (git object)"
-        shell: bash
-        run: |
-          set -euo pipefail
-          files=(
-            "packages/core/src/index.mjs"
-            "packages/core/src/orchestrator.mjs"
-            "packages/core/src/llm/openai.mjs"
-            "packages/core/src/llm/gemini.mjs"
+      - name: "Preflight: required files (git object)"                  # 프리플라이트(깃 오브젝트)
+        shell: bash                                                     # 셸
+        run: |                                                          # 스크립트
+          set -euo pipefail                                            # 안전 옵션
+          files=(                                                      # 파일 리스트
+            "packages/core/src/index.mjs"                               # 필수1
+            "packages/core/src/orchestrator.mjs"                        # 필수2
+            "packages/core/src/llm/openai.mjs"                          # 필수3
+            "packages/core/src/llm/gemini.mjs"                          # 필수4
           )
-          for f in "${files[@]}"; do
-            if git show "HEAD:$f" >/dev/null 2>&1; then
-              echo "OK (git): $f"
-            else
-              echo "::error file=$f::missing in commit (git object)"
-              exit 1
-            fi
-          done
+          for f in "${files[@]}"; do                                    # 반복
+            if git show "HEAD:$f" >/dev/null 2>&1; then                 # 깃 오브젝트 확인
+              echo "OK (git): $f"                                       # 통과 메시지
+            else                                                        # 실패
+              echo "::error file=$f::missing in commit (git object)"    # 에러 로그
+              exit 1                                                    # 종료
+            fi                                                          # if 끝
+          done                                                          # for 끝
 
-      - name: "Preflight: required files (git object)"
-        shell: bash
-        run: |
-          set -euo pipefail
-          for f in packages/core/src/index.mjs packages/core/src/orchestrator.mjs packages/core/src/llm/openai.mjs packages/core/src/llm/gemini.mjs; do
-            if [ -f "$f" ]; then
-              echo "OK (fs): $f"
-              ls -l "$f"
-              sha256sum "$f" 2>/dev/null || shasum -a 256 "$f"
-            else
-              echo "::error file=$f::missing on disk (workspace)"
-              exit 1
-            fi
-          done
+      - name: "Preflight: required files (workspace)"                   # ★ 이름 수정(중복 구분)
+        shell: bash                                                     # 셸
+        run: |                                                          # 스크립트
+          set -euo pipefail                                            # 안전 옵션
+          for f in packages/core/src/index.mjs packages/core/src/orchestrator.mjs packages/core/src/llm/openai.mjs packages/core/src/llm/gemini.mjs; do # 파일들
+            if [ -f "$f" ]; then                                        # 존재 확인
+              echo "OK (fs): $f"                                        # 통과
+              ls -l "$f"                                                # 상세
+              (command -v sha256sum >/dev/null && sha256sum "$f") || shasum -a 256 "$f" # 해시
+            else                                                        # 없으면
+              echo "::error file=$f::missing on disk (workspace)"       # 에러
+              exit 1                                                    # 종료
+            fi                                                          # if 끝
+          done                                                          # for 끝
 
-      - name: Auto Code (Toolkit)
-        uses: ./.github/actions/auto-code
-        env:
-          GH_TOKEN: ${{ github.token }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
-        with:
-          config-path: config/toolkit.config.json
-          upload-artifacts: 'true'
+      - name: Auto Code (Toolkit)                                       # 오토코드 실행
+        uses: ./.github/actions/auto-code                               # 로컬 액션
+        env:                                                            # 환경변수
+          GH_TOKEN: ${{ github.token }}                                 # 토큰
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}                 # 시크릿
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}                 # 시크릿
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}           # 시크릿
+          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}                 # 시크릿
+        with:                                                           # 입력
+          config-path: config/toolkit.config.json                       # 설정 경로
+          upload-artifacts: 'true'                                      # 아티팩트 업로드
+
+      - name: Upload stage/run meta logs                                 # ★ 스테이지/메타 아티팩트 보장
+        if: always()                                                     # 항상 실행
+        uses: actions/upload-artifact@v4                                 # 업로드 액션
+        with:                                                            # 입력
+          name: auto-logs                                                # 아티팩트명
+          path: |                                                        # 경로들
+            .github/auto/diagnostics-last.json                           # 진단 로그
+            .github/auto/stage-log.json                                  # ★ 스테이지 로그
+            .github/auto/run-meta.json                                   # ★ 런 메타
+          if-no-files-found: ignore                                       # 없으면 무시
