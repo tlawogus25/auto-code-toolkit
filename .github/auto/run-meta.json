@@ -1,0 +1,16 @@
+{
+  "startedAt": "2025-09-05T19:07:45.596Z",
+  "event": "labeled",
+  "source": "issue",
+  "sourceIssueNumber": 36,
+  "tokens": [
+    "ping"
+  ],
+  "planOnly": false,
+  "longMode": false,
+  "llm": "openai",
+  "model": "gpt-4o",
+  "agent": "cursor",
+  "branch": "auto/1757099269212",
+  "prNumber": null
+}

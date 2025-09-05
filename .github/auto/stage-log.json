@@ -1,0 +1,99 @@
+[
+  {
+    "stage": "bootstrap",
+    "ok": true,
+    "details": {
+      "hasAuto": true,
+      "hasRunLabel": true
+    },
+    "ts": "2025-09-05T19:07:45.597Z"
+  },
+  {
+    "stage": "route:pre",
+    "ok": true,
+    "details": {
+      "planOnly": false
+    },
+    "ts": "2025-09-05T19:07:45.597Z"
+  },
+  {
+    "stage": "route:selected",
+    "ok": true,
+    "details": {
+      "llm": "openai",
+      "model": "gpt-4o",
+      "agent": "cursor"
+    },
+    "ts": "2025-09-05T19:07:45.597Z"
+  },
+  {
+    "stage": "hooks:beforeLLM",
+    "ok": true,
+    "details": null,
+    "ts": "2025-09-05T19:07:45.597Z"
+  },
+  {
+    "stage": "llm:openai",
+    "ok": true,
+    "details": {
+      "model": "gpt-4o"
+    },
+    "ts": "2025-09-05T19:07:49.158Z"
+  },
+  {
+    "stage": "llm:prompt-ready",
+    "ok": true,
+    "details": {
+      "length": 139
+    },
+    "ts": "2025-09-05T19:07:49.159Z"
+  },
+  {
+    "stage": "hooks:afterLLM",
+    "ok": true,
+    "details": null,
+    "ts": "2025-09-05T19:07:49.159Z"
+  },
+  {
+    "stage": "git:branch",
+    "ok": true,
+    "details": {
+      "branch": "auto/1757099269212"
+    },
+    "ts": "2025-09-05T19:07:49.231Z"
+  },
+  {
+    "stage": "hooks:beforeAgent",
+    "ok": true,
+    "details": {
+      "step": 1
+    },
+    "ts": "2025-09-05T19:07:49.231Z"
+  },
+  {
+    "stage": "agent:primary",
+    "ok": false,
+    "details": {
+      "used": "cursor",
+      "error": "Command failed: cursor-agent -p \"=== SAFETY RULES ===\\n- Do NOT execute shell or Bash.\\n- Produce unified diffs or explicit file edits only.\\n- If a path does not exist, create the directory and file as part of the patch.\\n\\n안녕하세요! 도움을 드리기 위해, 현재 어떤 작업을 하고 계신지 구체적으로 말씀해 주시면 좋겠습니다. 예를 들어, 코드 수정, 문서화 작업 또는 테스트 추가 등이 있을 수 있습니다. 필요하신 부분을 알려주시면 어떻게 진행할지 계획을 세워드리겠습니다.\" --output-format text"
+    },
+    "ts": "2025-09-05T19:07:50.623Z"
+  },
+  {
+    "stage": "agent:fallback",
+    "ok": true,
+    "details": {
+      "chain": "cursor->claude"
+    },
+    "ts": "2025-09-05T19:07:55.688Z"
+  },
+  {
+    "stage": "hooks:afterAgent",
+    "ok": true,
+    "details": {
+      "step": 1,
+      "ok": true
+    },
+    "ts": "2025-09-05T19:07:55.689Z"
+  }
+]
