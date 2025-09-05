@@ -10,10 +10,12 @@ on:                                                                    # 트리�
         required: false
         type: string                                   # 수동 트리거
 
+
 permissions:                                                           # 권한
   contents: write                                                      # 콘텐츠 쓰기
   pull-requests: write                                                 # PR 쓰기
   issues: write                                                            # 이슈 읽기
+
 
 concurrency:                                                           # 동시성
   group: auto-code-${{ github.event.issue.number || github.event.pull_request.number || github.run_id }}
@@ -23,6 +25,7 @@ jobs:                                                                  # 잡
   run:                                                                 # 잡 이름
     runs-on: [self-hosted, macOS, ARM64]                               # 러너
     if: "github.event_name == 'workflow_dispatch' || (github.event_name == 'issues' && contains(github.event.issue.labels.*.name, 'automation:run') && startsWith(github.event.issue.body, '/auto')) || (github.event_name == 'issue_comment' && contains(github.event.issue.labels.*.name, 'automation:run') && startsWith(github.event.comment.body, '/auto'))"                     # 조건
+
     steps:                                                              # 스텝
       - name: Checkout (default branch, deep, clean)                    # 체크아웃
         uses: actions/checkout@v4                                       # 액션
