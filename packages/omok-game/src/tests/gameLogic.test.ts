@@ -6,9 +6,10 @@ import {
   makeMove, 
   checkWin,
   getNextPlayer,
+  getWinner,
   isBoardFull
 } from '../logic/gameLogic.js';
-import { PlayerColor, BOARD_SIZE } from '../types/game.js';
+import { PlayerColor, BOARD_SIZE, GameStatus } from '../types/game.js';
 
 describe('Game Logic Tests', () => {
   describe('createEmptyBoard', () => {
@@ -204,6 +205,161 @@ describe('Game Logic Tests', () => {
       }
       
       expect(isBoardFull(board)).toBe(true);
+    });
+  });
+
+  describe('getWinner', () => {
+    it('should return null for empty game state', () => {
+      const gameState = {
+        board: createEmptyBoard(),
+        currentPlayer: PlayerColor.BLACK,
+        status: GameStatus.WAITING,
+        winner: null,
+        moves: [],
+        roomId: 'test-room'
+      };
+      
+      expect(getWinner(gameState)).toBe(null);
+    });
+
+    it('should return winner when last move creates winning condition', () => {
+      const board = createEmptyBoard();
+      
+      // Create horizontal winning line for black
+      for (let i = 0; i < 5; i++) {
+        board[7][i] = PlayerColor.BLACK;
+      }
+      
+      const gameState = {
+        board,
+        currentPlayer: PlayerColor.BLACK,
+        status: GameStatus.IN_PROGRESS,
+        winner: null,
+        moves: [
+          { position: { row: 7, col: 0 }, player: PlayerColor.BLACK, timestamp: Date.now() },
+          { position: { row: 8, col: 0 }, player: PlayerColor.WHITE, timestamp: Date.now() },
+          { position: { row: 7, col: 1 }, player: PlayerColor.BLACK, timestamp: Date.now() },
+          { position: { row: 8, col: 1 }, player: PlayerColor.WHITE, timestamp: Date.now() },
+          { position: { row: 7, col: 2 }, player: PlayerColor.BLACK, timestamp: Date.now() },
+          { position: { row: 8, col: 2 }, player: PlayerColor.WHITE, timestamp: Date.now() },
+          { position: { row: 7, col: 3 }, player: PlayerColor.BLACK, timestamp: Date.now() },
+          { position: { row: 8, col: 3 }, player: PlayerColor.WHITE, timestamp: Date.now() },
+          { position: { row: 7, col: 4 }, player: PlayerColor.BLACK, timestamp: Date.now() } // Winning move
+        ],
+        roomId: 'test-room'
+      };
+      
+      expect(getWinner(gameState)).toBe(PlayerColor.BLACK);
+    });
+
+    it('should return null when last move does not create winning condition', () => {
+      const board = createEmptyBoard();
+      
+      // Create non-winning pattern
+      board[7][0] = PlayerColor.BLACK;
+      board[7][1] = PlayerColor.BLACK;
+      board[7][2] = PlayerColor.WHITE; // Interruption
+      board[7][3] = PlayerColor.BLACK;
+      
+      const gameState = {
+        board,
+        currentPlayer: PlayerColor.BLACK,
+        status: GameStatus.IN_PROGRESS,
+        winner: null,
+        moves: [
+          { position: { row: 7, col: 3 }, player: PlayerColor.BLACK, timestamp: Date.now() }
+        ],
+        roomId: 'test-room'
+      };
+      
+      expect(getWinner(gameState)).toBe(null);
+    });
+  });
+
+  describe('edge cases and boundary conditions', () => {
+    it('should handle board boundary correctly', () => {
+      const board = createEmptyBoard();
+      
+      // Place stones at corners
+      expect(isValidPosition({ row: 0, col: 0 })).toBe(true);
+      expect(isValidPosition({ row: BOARD_SIZE - 1, col: BOARD_SIZE - 1 })).toBe(true);
+      expect(isValidPosition({ row: -1, col: 0 })).toBe(false);
+      expect(isValidPosition({ row: BOARD_SIZE, col: 0 })).toBe(false);
+    });
+
+    it('should detect win condition at board edges', () => {
+      const board = createEmptyBoard();
+      
+      // Horizontal win at top edge
+      for (let i = 0; i < 5; i++) {
+        board[0][i] = PlayerColor.BLACK;
+      }
+      
+      expect(checkWin(board, { row: 0, col: 2 }, PlayerColor.BLACK)).toBe(true);
+      
+      // Horizontal win at right edge
+      const board2 = createEmptyBoard();
+      for (let i = 0; i < 5; i++) {
+        board2[0][BOARD_SIZE - 5 + i] = PlayerColor.WHITE;
+      }
+      
+      expect(checkWin(board2, { row: 0, col: BOARD_SIZE - 3 }, PlayerColor.WHITE)).toBe(true);
+    });
+
+    it('should handle diagonal wins at corners', () => {
+      const board = createEmptyBoard();
+      
+      // Diagonal win from top-left corner
+      for (let i = 0; i < 5; i++) {
+        board[i][i] = PlayerColor.BLACK;
+      }
+      
+      expect(checkWin(board, { row: 0, col: 0 }, PlayerColor.BLACK)).toBe(true);
+      expect(checkWin(board, { row: 4, col: 4 }, PlayerColor.BLACK)).toBe(true);
+      
+      // Diagonal win from top-right towards bottom-left
+      const board2 = createEmptyBoard();
+      for (let i = 0; i < 5; i++) {
+        board2[i][BOARD_SIZE - 1 - i] = PlayerColor.WHITE;
+      }
+      
+      expect(checkWin(board2, { row: 0, col: BOARD_SIZE - 1 }, PlayerColor.WHITE)).toBe(true);
+    });
+
+    it('should not detect win with exactly 6 stones in sequence', () => {
+      const board = createEmptyBoard();
+      
+      // Place 6 stones horizontally (should still detect win since omok allows overlines)
+      for (let i = 0; i < 6; i++) {
+        board[7][i] = PlayerColor.BLACK;
+      }
+      
+      expect(checkWin(board, { row: 7, col: 2 }, PlayerColor.BLACK)).toBe(true);
+      expect(checkWin(board, { row: 7, col: 0 }, PlayerColor.BLACK)).toBe(true);
+      expect(checkWin(board, { row: 7, col: 5 }, PlayerColor.BLACK)).toBe(true);
+    });
+
+    it('should handle makeMove with invalid positions', () => {
+      const board = createEmptyBoard();
+      board[0][0] = PlayerColor.BLACK;
+      
+      expect(() => makeMove(board, { row: 0, col: 0 }, PlayerColor.WHITE))
+        .toThrow('Position is already occupied');
+      
+      expect(() => makeMove(board, { row: -1, col: 0 }, PlayerColor.WHITE))
+        .toThrow('Position is already occupied');
+    });
+
+    it('should preserve immutability of original board', () => {
+      const originalBoard = createEmptyBoard();
+      const boardCopy = originalBoard.map(row => [...row]);
+      
+      const newBoard = makeMove(originalBoard, { row: 5, col: 5 }, PlayerColor.BLACK);
+      
+      // Original board should remain unchanged
+      expect(originalBoard).toEqual(boardCopy);
+      expect(newBoard[5][5]).toBe(PlayerColor.BLACK);
+      expect(originalBoard[5][5]).toBe(null);
     });
   });
 });

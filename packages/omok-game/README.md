@@ -94,8 +94,10 @@ src/
 │   ├── game.ts         # Game-related types
 │   └── messages.ts     # WebSocket message types
 └── tests/              # Test files
-    ├── gameLogic.test.ts  # Unit tests for game logic
-    └── playtest.test.ts   # E2E integration tests
+    ├── gameLogic.test.ts  # Unit tests (28 test cases)
+    ├── playtest.test.ts   # WebSocket integration tests (3 scenarios)
+    └── e2e/               # End-to-end tests
+        └── omok.spec.ts   # Playwright browser tests (4 scenarios)
 ```
 
 ### Key Components
@@ -118,20 +120,42 @@ src/
 
 ## Testing
 
-### Run Unit Tests
+The project includes comprehensive test coverage with multiple testing approaches:
+
+### Unit Tests
+```bash
+npm run test:unit
+```
+- **Coverage**: 28 test cases covering core game logic
+- **Focus**: Game mechanics, win detection, board validation, edge cases
+- **File**: `src/tests/gameLogic.test.ts`
+
+### WebSocket Integration Tests  
+```bash
+npm run test:e2e
+```
+- **Coverage**: 3 test scenarios for client-server communication
+- **Focus**: Room creation, WebSocket connectivity, error handling
+- **File**: `src/tests/playtest.test.ts`
+
+### Browser E2E Tests (Playwright)
+```bash
+npm run test:e2e:playwright
+```
+- **Coverage**: 4 test scenarios for full browser interaction
+- **Focus**: UI components, user workflows, cross-browser compatibility  
+- **File**: `tests/e2e/omok.spec.ts`
+
+### Run All Tests
 ```bash
 npm test
 ```
 
-### Run Specific Test File
-```bash
-npm test gameLogic.test.ts
-```
-
 The test suite includes:
-- **Unit Tests**: Game logic validation, win condition detection
-- **Integration Tests**: Full game flow simulation with WebSocket communication
-- **Edge Case Testing**: Invalid moves, disconnection handling
+- **Unit Tests**: Game logic validation, win condition detection, boundary conditions
+- **Integration Tests**: Full game flow simulation with WebSocket communication  
+- **E2E Tests**: Browser-based UI testing with Playwright
+- **Edge Case Testing**: Invalid moves, disconnection handling, error scenarios
 
 ## WebSocket API
 

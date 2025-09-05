@@ -297,4 +297,12 @@ export class GameServer {
   private generatePlayerId(): string {
     return Math.random().toString(36).substring(2, 15);
   }
+
+  public close(): Promise<void> {
+    return new Promise((resolve) => {
+      this.wss.close(() => {
+        resolve();
+      });
+    });
+  }
 }

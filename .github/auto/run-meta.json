@@ -1,27 +1,24 @@
 {
-  "startedAt": "2025-09-05T19:14:11.098Z",
+  "startedAt": "2025-09-05T20:28:21.037Z",
   "event": "labeled",
   "source": "issue",
-  "sourceIssueNumber": 2,
+  "sourceIssueNumber": 39,
   "tokens": [
     "edit",
     "long",
-    "time-420m",
-    "steps-6",
     "diagnose",
     "autorepair",
     "test-build",
     "lint-fix",
-    "budget-tokens-5k",
     "cooldown-15s",
-    "auto-merge-when-green",
-    "continue-after-merge"
+    "time-120m",
+    "steps-2"
   ],
   "planOnly": false,
   "longMode": false,
   "llm": "openai",
   "model": "gpt-4o",
   "agent": "cursor",
-  "branch": "auto/1757099668158",
+  "branch": "auto/1757104113899",
   "prNumber": null
 }
