@@ -1,82 +1,74 @@
-name: post-merge-continue
-on:
-  pull_request:
-    types: [closed]
+# post-merge-continue.yml                                           # 워크플로 파일명
+name: post-merge-continue                                           # 이름
+on:                                                                 # 트리거
+  pull_request:                                                     # PR 이벤트
+    types: [closed]                                                 # 닫힘(머지 포함)
 
-permissions:
-  contents: read
-  pull-requests: read
-  issues: write
+permissions:                                                        # 권한
+  contents: read                                                    # 콘텐츠 읽기
+  pull-requests: read                                               # PR 읽기
+  issues: write                                                     # 이슈 작성/라벨
 
-jobs:
-  continue:
-    if: ${{ github.event.pull_request.merged == true && contains(github.event.pull_request.labels.*.name, 'automation:continue') }}
-    runs-on: ubuntu-latest
-    steps:
-      # PR 코멘트/본문에서 직전 프롬프트를 찾아 후속 이슈를 생성합니다.
-      - name: Create follow-up issue with previous prompt context
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const pr = context.payload.pull_request;
-            const { owner, repo } = context.repo;
-
-            // 1) PR 코멘트 전부 조회
-            const comments = await github.paginate(
-              github.rest.issues.listComments,
-              { owner, repo, issue_number: pr.number, per_page: 100 }
+jobs:                                                                # 잡들
+  continue:                                                          # 잡 이름
+    if: ${{ github.event.pull_request.merged == true && contains(github.event.pull_request.labels.*.name, 'automation:continue') }} # 조건: 머지+라벨
+    runs-on: ubuntu-latest                                           # 러너
+    steps:                                                           # 스텝
+      - name: Create follow-up issue with previous prompt context    # 후속 이슈 생성
+        uses: actions/github-script@v7                               # github-script 사용
+        with:                                                        # 입력
+          script: |                                                  # 스크립트
+            const pr = context.payload.pull_request;                 // PR 페이로드
+            const { owner, repo } = context.repo;                    // 리포 정보
+            // 1) PR 코멘트 전체 조회
+            const comments = await github.paginate(                  // 페이지네이션
+              github.rest.issues.listComments,                       // 코멘트 API
+              { owner, repo, issue_number: pr.number, per_page: 100 } // 파라미터
             );
-
-            // 2) 우리가 남긴 프롬프트 코멘트 찾기(오케스트레이터 포맷 탐색)
-            //    - "# Original Prompt" 또는 "## Last Agent Prompt" 헤더를 단서로 사용
-            let promptBlock = null;
-            for (const c of comments.reverse()) {
-              const body = c.body || "";
-              if (body.includes("# Original Prompt") || body.includes("## Last Agent Prompt")) {
-                promptBlock = body;
-                break;
+            // 2) 오케스트레이터 프롬프트 코멘트 탐색
+            let promptBlock = null;                                  // 초기값
+            for (const c of comments.reverse()) {                    // 최신부터
+              const body = c.body || "";                             // 본문
+              if (body.includes("# Original Prompt") || body.includes("## Last Agent Prompt")) { // 시그니처
+                promptBlock = body;                                  // 캡처
+                break;                                               // 탈출
               }
             }
-
-            // 3) 코멘트가 없으면 PR 본문에서 대체(오케스트레이터가 "## Prompt (truncated)"를 넣음)
-            if (!promptBlock) {
-              const body = pr.body || "";
-              if (body.includes("## Prompt")) {
-                promptBlock = body;
-              }
+            // 3) 코멘트 없으면 PR 본문 대체(트렁케이트)
+            if (!promptBlock) {                                      // 없으면
+              const b = pr.body || "";                               // PR 본문
+              if (b.includes("## Prompt")) promptBlock = b;          // 대체 설정
             }
-
-            // 4) 그래도 없으면 안내 문구로 대체
-            if (!promptBlock) {
-              promptBlock = "_No previous prompt could be retrieved from PR comments/body._";
+            // 4) 그래도 없으면 안내 문구
+            if (!promptBlock) {                                      // 여전히 없음
+              promptBlock = "_No previous prompt could be retrieved from PR comments/body._"; // 안내
             }
-
-            // 5) 너무 길면 안전하게 자르기(이슈 본문 한도 대비 여유)
-            const MAX = 55000;
-            if (promptBlock.length > MAX) {
-              promptBlock = promptBlock.slice(0, MAX) + "\n\n_(truncated)_";
-            }
-
-            // 6) 후속 이슈 본문 템플릿
+            // 5) PR 본문에서 원 이슈 번호 추출(오케스트레이터가 넣음)
+            const m = (pr.body||"").match(/Source-Issue:\s*#(\d+)/i); // 정규식 매칭
+            const sourceIssue = m ? Number(m[1]) : null;             // 원 이슈 번호
+            // 6) 길이 보호(이슈 본문 한도 대비)
+            const MAX = 55000;                                       // 최대 길이
+            if (promptBlock.length > MAX) promptBlock = promptBlock.slice(0, MAX) + "\n\n_(truncated)_"; // 자르기
+            // 7) 체인 마커와 템플릿 구성
+            const chainMarker = `<!-- chain:pr${pr.number}->issue? source:${sourceIssue||'n/a'} run:${context.runId} -->`; // 체인
             const template = [
-              "/auto edit long diagnose autorepair test-build lint-fix cooldown-15s time-120m steps-2",
-              "이전 PR의 작업을 이어서 다음 우선순위를 진행합니다.",
-              "- 실패/미흡 테스트 보완",
-              "- 경량 e2e 1~2개 추가(가능 시)",
-              "- README 보강",
-              "",
-              "[Context from previous run]",
-              "",
-              promptBlock
-            ].join("\n");
-
-            // 7) 이슈 생성 (필수 라벨 부여)
-            const title = `Continue: follow-up tasks after PR #${pr.number}`;
-            const issue = await github.rest.issues.create({
-              owner, repo,
-              title,
-              body: template,
-              labels: ["automation:run"]
-            });
-
-            core.info(`Opened issue #${issue.data.number} for follow-up.`);
+              "/auto edit long diagnose autorepair test-build lint-fix cooldown-15s time-120m steps-2", // 후속 명령
+              "이전 PR의 작업을 이어서 다음 우선순위를 진행합니다.",                                  // 설명
+              "- 실패/미흡 테스트 보완",                                                               // 할 일
+              "- 경량 e2e 1~2개 추가(가능 시)",                                                        // 할 일
+              "- README 보강",                                                                         // 할 일
+              "",                                                                                      // 공백
+              chainMarker,                                                                             // ★ 체인 마커
+              "",                                                                                      // 공백
+              "[Context from previous run]",                                                           // 문맥
+              "",                                                                                      // 공백
+              promptBlock                                                                              // 프롬프트 블록
+            ].join("\n");                                                                              // 결합
+            // 8) 이슈 생성(필수 라벨 부여)
+            const title = `Continue: follow-up tasks after PR #${pr.number}`;                          // 제목
+            const issue = await github.rest.issues.create({ owner, repo, title, body: template, labels: ["automation:run","automation:generated"] }); // 생성
+            // 9) 체인 마커 업데이트(이슈 번호 확정 후 설명 코멘트 추가)
+            await github.rest.issues.createComment({ owner, repo, issue_number: issue.data.number, body: `Follow-up for PR #${pr.number}\n\n${chainMarker.replace('issue?', 'issue'+issue.data.number)}` }); // 코멘트
+            core.summary.addHeading("Follow-up Issue Created")                                         // 요약
+              .addRaw(`Issue #${issue.data.number} for PR #${pr.number}`)                              // 내용
+              .write();                                                                                // 출력
