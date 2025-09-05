@@ -117,6 +117,7 @@ export async function runOrchestrator({ repoRoot, configPath, eventPath }) {    
     "- 변경은 설명 가능한 작은 커밋 단위 권장",
     "- 절대 쉘/Bash 명령을 실행하지 말 것(파일 편집/패치만 수행)",
     "- 존재하지 않는 디렉터리는 패치 내에서 생성 후 파일을 추가"
+
   ].join("\n");                                                                       // 조합
 
   const content = [                                                                   // LLM 사용자 입력
@@ -176,6 +177,7 @@ export async function runOrchestrator({ repoRoot, configPath, eventPath }) {    
       return t || "";                                                                 // 반환
     }
   }
+
 
   function synthesizePrompt() {                                                       // 빈값 대비 합성
     return [
@@ -322,6 +324,7 @@ export async function runOrchestrator({ repoRoot, configPath, eventPath }) {    
 
   if (prNumber) {                                                                          // 번호 있으면
     execSync(                                                                              // 프롬프트 코멘트 추가
+
       `gh pr comment ${prNumber} --body-file ${JSON.stringify(promptBodyPath)}`,
       { stdio: "inherit" }                                                                 // 표준 입출력
     );

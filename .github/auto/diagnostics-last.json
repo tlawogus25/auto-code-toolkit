@@ -1,0 +1,20 @@
+{
+  "when": "2025-09-04T14:57:00.125Z",
+  "logs": [
+    {
+      "stage": "lint-fix",
+      "ok": true,
+      "out": ""
+    },
+    {
+      "stage": "test",
+      "ok": true,
+      "out": ""
+    },
+    {
+      "stage": "build",
+      "ok": true,
+      "out": ""
+    }
+  ]
+}
