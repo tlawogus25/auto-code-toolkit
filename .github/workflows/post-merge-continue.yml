@@ -8,6 +8,7 @@ permissions:                                                        # 권한
   contents: read                                                    # 콘텐츠 읽기
   pull-requests: read                                               # PR 읽기
   issues: write                                                     # 이슈 작성/라벨
+  actions: write                                                    # ★ workflow_dispatch 호출을 위해 추가
 
 jobs:                                                                # 잡들
   continue:                                                          # 잡 이름
@@ -69,6 +70,31 @@ jobs:                                                                # 잡들
             const issue = await github.rest.issues.create({ owner, repo, title, body: template, labels: ["automation:run","automation:generated"] }); // 생성
             // 9) 체인 마커 업데이트(이슈 번호 확정 후 설명 코멘트 추가)
             await github.rest.issues.createComment({ owner, repo, issue_number: issue.data.number, body: `Follow-up for PR #${pr.number}\n\n${chainMarker.replace('issue?', 'issue'+issue.data.number)}` }); // 코멘트
-            core.summary.addHeading("Follow-up Issue Created")                                         // 요약
-              .addRaw(`Issue #${issue.data.number} for PR #${pr.number}`)                              // 내용
-              .write();                                                                                // 출력
+            // 10) 다음 스텝에서 쓸 출력값
+            core.setOutput("issue_number", String(issue.data.number));
+            core.setOutput("auto_line", autoLine);
+
+      - name: Trigger auto-code via workflow_dispatch                 # ★ auto-code를 명시적으로 기동
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const ref = context.payload.pull_request?.base?.ref || (context.payload.repository?.default_branch ?? "main");
+            // inputs.body 에 /auto 한 줄을 넣어 수동 트리거 (GITHUB_TOKEN으로도 허용됨)
+            await github.rest.actions.createWorkflowDispatch({
+              owner, repo,
+              workflow_id: ".github/workflows/auto-code.yml",
+              ref,
+              inputs: { body: core.getInput("auto_line") || "/auto ping" }
+            });
+          result-encoding: string
+          # github-script의 core.getInput은 with: inputs가 아니라 직전 스텝 output을 못 읽습니다.
+          # 따라서 위 getInput은 fallback 용이며, 실제 값은 아래 env로 전달합니다.
+        env:
+          # 직전 스텝의 outputs를 env로 넘겨 javascript에서 process.env로 읽습니다.
+          AUTO_LINE: ${{ steps.create_follow_up_issue_with_previous_prompt_context.outputs.auto_line }}
+        # github-script 내부에서 process.env.AUTO_LINE 사용:
+        # => inputs: { body: process.env.AUTO_LINE || "/auto ping" }
+        # 위 스크립트를 다음처럼 수정하려면, 위 script 블록 안에 다음 두 줄을 추가하세요:
+        #   const autoLine = process.env.AUTO_LINE || "/auto ping";
+        #   inputs: { body: autoLine }

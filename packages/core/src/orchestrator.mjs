@@ -285,6 +285,7 @@ export async function runOrchestrator({ repoRoot, configPath, eventPath }) {    
     for (const h of (hooks.beforeAgent || [])) await h(ctx);
     appendStage("hooks:beforeAgent", true, { step });
     const result = await runAgentWithFallback(ctx.agentPrompt, tools, policy);
+    ctx.agentUsed = result.used || ctx.agent; // ★ 실제 사용 체인 기록
     for (const h of (hooks.afterAgent || [])) await h(ctx);
     appendStage("hooks:afterAgent", true, { step, ok: result.ok });
     checkpointCommit(`auto: checkpoint step ${step}`);
@@ -314,6 +315,8 @@ export async function runOrchestrator({ repoRoot, configPath, eventPath }) {    
   for (const h of (hooks.beforePR || [])) await h(ctx);
   appendStage("hooks:beforePR", true, null);
 
+  // 결과 요약에 실제 사용된 에이전트 체인(result.used)을 합류
+  const agentUsed = (ctx.agentUsed && String(ctx.agentUsed).trim()) || ctx.agent;
   const tokenList = (ctx.tokens||[]).join(", ") || "(none)";
   const labelList = labels.join(", ") || "(none)";
   const truncatedUserDemand = (ctx.userDemand || "").slice(0, 2000);
@@ -323,8 +326,9 @@ export async function runOrchestrator({ repoRoot, configPath, eventPath }) {    
   const infoMd = [
     `## Auto-run Info`,
     ``,
-    `- LLM: **${ctx.llm}** (${ctx.model})`,
-    `- Agent: **${ctx.agent}**`,
+    `- LLM (plan): **${ctx.llm}** (${ctx.model})`,
+    `- Agent (requested): **${ctx.agent}**`,
+    `- Agent (actual): **${agentUsed}**`, // ★ 실제 사용 체인 표기
     `- Branch: ${ctx.branch}`,
     `- Labels: ${labelList}`,
     `- Tokens: ${tokenList}`,
@@ -345,7 +349,8 @@ export async function runOrchestrator({ repoRoot, configPath, eventPath }) {    
   writeFileSync(prBodyPath, infoMd, "utf8");
   writeFileSync(promptBodyPath, promptMd, "utf8");
 
-  const title = `auto: ${ctx.branch} [${ctx.llm}/${ctx.agent}] (tokens: ${tokenList})`;
+  // ★ 제목에도 실제 사용 체인 반영
+  const title = `auto: ${ctx.branch} [${ctx.llm}/${agentUsed}] (tokens: ${tokenList})`;
   execSync(
     `gh pr create --title ${JSON.stringify(title)} --body-file ${JSON.stringify(prBodyPath)} --base main --head ${ctx.branch}`,
     { stdio: "inherit" }
