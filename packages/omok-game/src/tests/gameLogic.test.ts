@@ -93,6 +93,18 @@ describe('Game Logic Tests', () => {
       expect(checkWin(board, { row: 7, col: 4 }, PlayerColor.BLACK)).toBe(true);
     });
 
+    it('should detect horizontal win at board edges', () => {
+      const board = createEmptyBoard();
+      
+      // Place 5 white stones at right edge
+      for (let i = 10; i < 15; i++) {
+        board[7][i] = PlayerColor.WHITE;
+      }
+      
+      expect(checkWin(board, { row: 7, col: 12 }, PlayerColor.WHITE)).toBe(true);
+      expect(checkWin(board, { row: 7, col: 14 }, PlayerColor.WHITE)).toBe(true);
+    });
+
     it('should detect vertical win', () => {
       const board = createEmptyBoard();
       
@@ -104,6 +116,18 @@ describe('Game Logic Tests', () => {
       expect(checkWin(board, { row: 2, col: 7 }, PlayerColor.BLACK)).toBe(true);
       expect(checkWin(board, { row: 0, col: 7 }, PlayerColor.BLACK)).toBe(true);
       expect(checkWin(board, { row: 4, col: 7 }, PlayerColor.BLACK)).toBe(true);
+    });
+
+    it('should detect vertical win at board edges', () => {
+      const board = createEmptyBoard();
+      
+      // Place 5 white stones at bottom edge
+      for (let i = 10; i < 15; i++) {
+        board[i][7] = PlayerColor.WHITE;
+      }
+      
+      expect(checkWin(board, { row: 12, col: 7 }, PlayerColor.WHITE)).toBe(true);
+      expect(checkWin(board, { row: 14, col: 7 }, PlayerColor.WHITE)).toBe(true);
     });
 
     it('should detect diagonal win (top-left to bottom-right)', () => {
@@ -170,6 +194,104 @@ describe('Game Logic Tests', () => {
       expect(checkWin(board, { row: 7, col: 0 }, PlayerColor.BLACK)).toBe(true);
       expect(checkWin(board, { row: 7, col: 2 }, PlayerColor.BLACK)).toBe(true);
       expect(checkWin(board, { row: 7, col: 5 }, PlayerColor.BLACK)).toBe(true);
+    });
+    it('should handle corner diagonal wins', () => {
+      const board = createEmptyBoard();
+      
+      // Place 5 black stones diagonally from corner
+      for (let i = 0; i < 5; i++) {
+        board[i][i] = PlayerColor.BLACK;
+      }
+      
+      expect(checkWin(board, { row: 0, col: 0 }, PlayerColor.BLACK)).toBe(true);
+      
+      // Test opposite diagonal from other corner
+      const board2 = createEmptyBoard();
+      for (let i = 0; i < 5; i++) {
+        board2[i][14 - i] = PlayerColor.WHITE;
+      }
+      
+      expect(checkWin(board2, { row: 2, col: 12 }, PlayerColor.WHITE)).toBe(true);
+    });
+
+    it('should not detect win for different colored stones', () => {
+      const board = createEmptyBoard();
+      
+      // Place alternating colors horizontally
+      board[7][0] = PlayerColor.BLACK;
+      board[7][1] = PlayerColor.WHITE;
+      board[7][2] = PlayerColor.BLACK;
+      board[7][3] = PlayerColor.WHITE;
+      board[7][4] = PlayerColor.BLACK;
+      
+      expect(checkWin(board, { row: 7, col: 0 }, PlayerColor.BLACK)).toBe(false);
+      expect(checkWin(board, { row: 7, col: 1 }, PlayerColor.WHITE)).toBe(false);
+    });
+
+    it('should handle boundary cases for win detection', () => {
+      const board = createEmptyBoard();
+      
+      // Test at board boundaries - top row
+      for (let i = 0; i < 5; i++) {
+        board[0][i] = PlayerColor.BLACK;
+      }
+      expect(checkWin(board, { row: 0, col: 2 }, PlayerColor.BLACK)).toBe(true);
+      
+      // Test at board boundaries - left column
+      const board2 = createEmptyBoard();
+      for (let i = 0; i < 5; i++) {
+        board2[i][0] = PlayerColor.WHITE;
+      }
+      expect(checkWin(board2, { row: 2, col: 0 }, PlayerColor.WHITE)).toBe(true);
+    });
+  });
+
+  describe('makeMove edge cases', () => {
+    it('should throw error for invalid positions', () => {
+      const board = createEmptyBoard();
+      
+      expect(() => makeMove(board, { row: -1, col: 0 }, PlayerColor.BLACK))
+        .toThrow();
+      expect(() => makeMove(board, { row: 0, col: -1 }, PlayerColor.BLACK))
+        .toThrow();
+      expect(() => makeMove(board, { row: 15, col: 0 }, PlayerColor.BLACK))
+        .toThrow();
+      expect(() => makeMove(board, { row: 0, col: 15 }, PlayerColor.BLACK))
+        .toThrow();
+    });
+
+    it('should create new board instance without modifying original', () => {
+      const originalBoard = createEmptyBoard();
+      const originalValue = originalBoard[7][7];
+      
+      const newBoard = makeMove(originalBoard, { row: 7, col: 7 }, PlayerColor.BLACK);
+      
+      expect(originalBoard[7][7]).toBe(originalValue);
+      expect(newBoard[7][7]).toBe(PlayerColor.BLACK);
+      expect(newBoard).not.toBe(originalBoard);
+    });
+  });
+
+  describe('isValidPosition edge cases', () => {
+    it('should handle boundary positions correctly', () => {
+      // Valid boundary positions
+      expect(isValidPosition({ row: 0, col: 0 })).toBe(true);
+      expect(isValidPosition({ row: 0, col: 14 })).toBe(true);
+      expect(isValidPosition({ row: 14, col: 0 })).toBe(true);
+      expect(isValidPosition({ row: 14, col: 14 })).toBe(true);
+      
+      // Invalid positions just outside boundaries
+      expect(isValidPosition({ row: -1, col: -1 })).toBe(false);
+      expect(isValidPosition({ row: 15, col: 15 })).toBe(false);
+      expect(isValidPosition({ row: 0, col: 15 })).toBe(false);
+      expect(isValidPosition({ row: 15, col: 0 })).toBe(false);
+    });
+
+    it('should handle large numbers correctly', () => {
+      expect(isValidPosition({ row: 100, col: 7 })).toBe(false);
+      expect(isValidPosition({ row: 7, col: 100 })).toBe(false);
+      expect(isValidPosition({ row: -100, col: 7 })).toBe(false);
+      expect(isValidPosition({ row: 7, col: -100 })).toBe(false);
     });
   });
 
