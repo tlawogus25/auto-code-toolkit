@@ -88,7 +88,6 @@ export async function runOrchestrator({ repoRoot, configPath, eventPath }) {    
   writeRunMeta();                                                                      // 초기 메타 저장
 
   for (const t of seq) { const h = tokens.get(t.toLowerCase()); if (h) await h(ctx); } // 토큰 핸들러
-
   const highCost = labels.includes(labelsCfg.highCost || "automation:high-cost");     // 고비용 라벨
   const max = policy.hard_stop_chars_without_high_cost_label ?? 20000;                // 입력 상한
   const planThreshold = policy.plan_only_threshold_chars ?? 8000;                     // 플랜 상한
@@ -117,7 +116,6 @@ export async function runOrchestrator({ repoRoot, configPath, eventPath }) {    
     "- 변경은 설명 가능한 작은 커밋 단위 권장",
     "- 절대 쉘/Bash 명령을 실행하지 말 것(파일 편집/패치만 수행)",
     "- 존재하지 않는 디렉터리는 패치 내에서 생성 후 파일을 추가"
-
   ].join("\n");                                                                       // 조합
 
   const content = [                                                                   // LLM 사용자 입력
@@ -177,7 +175,6 @@ export async function runOrchestrator({ repoRoot, configPath, eventPath }) {    
       return t || "";                                                                 // 반환
     }
   }
-
 
   function synthesizePrompt() {                                                       // 빈값 대비 합성
     return [
@@ -324,7 +321,6 @@ export async function runOrchestrator({ repoRoot, configPath, eventPath }) {    
 
   if (prNumber) {                                                                          // 번호 있으면
     execSync(                                                                              // 프롬프트 코멘트 추가
-
       `gh pr comment ${prNumber} --body-file ${JSON.stringify(promptBodyPath)}`,
       { stdio: "inherit" }                                                                 // 표준 입출력
     );
@@ -338,4 +334,3 @@ export async function runOrchestrator({ repoRoot, configPath, eventPath }) {    
   appendStage("done", true, { longMode: ctx.longMode });                                   // 완료 기록
 
   return { success: true, branch: ctx.branch, long: ctx.longMode, usage: ctx.usageTotals, prNumber: ctx.prNumber }; // 반환
-}                                                                                          // 함수 끝
