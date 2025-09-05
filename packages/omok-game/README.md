@@ -45,18 +45,17 @@ npm install
 
 #### Development Mode
 
-1. **Start the WebSocket Server**:
+1. **Start the Development Server** (includes both client and server):
 ```bash
 npm run dev
 ```
-This will start the game server on port 8080 (or PORT environment variable).
+This starts the Next.js development server on port 3000 with WebSocket server.
 
-2. **Build the Client** (in a separate terminal):
+2. **Alternative: Start WebSocket Server Only**:
 ```bash
-npm run build
+npm run server
 ```
-
-3. **Serve the Client**: You'll need to serve the built React components using your preferred method (e.g., a local HTTP server).
+This will start just the WebSocket game server on port 8080 (or PORT environment variable).
 
 #### Production Mode
 
@@ -118,20 +117,35 @@ src/
 
 ## Testing
 
-### Run Unit Tests
+### Run All Tests
 ```bash
 npm test
 ```
 
-### Run Specific Test File
+### Run Unit Tests Only
 ```bash
-npm test gameLogic.test.ts
+npm run test:unit
+```
+
+### Run E2E Tests Only
+```bash
+npm run test:e2e
+```
+
+### Run Tests with Watch Mode
+```bash
+npm run test -- --watch
+```
+
+### Type Checking
+```bash
+npm run typecheck
 ```
 
 The test suite includes:
-- **Unit Tests**: Game logic validation, win condition detection
-- **Integration Tests**: Full game flow simulation with WebSocket communication
-- **Edge Case Testing**: Invalid moves, disconnection handling
+- **Unit Tests** (`src/tests/gameLogic.test.ts`): 28 comprehensive tests covering game logic validation, win condition detection, edge cases, and boundary conditions
+- **E2E Tests** (`src/tests/playtest.test.ts`): 4 integration tests covering room creation, player joining, move making, and disconnection handling
+- **Test Coverage**: Comprehensive coverage of core game mechanics, WebSocket communication, and error scenarios
 
 ## WebSocket API
 
