@@ -1,11 +1,9 @@
 # auto-code.yml                                                        # 워크플로 파일명
 name: auto-code                                                        # 이름
 on:                                                                    # 트리거
-  issues:
-    types: [opened, labeled]          # edited 제거 → 코멘트 기반 재실행은 댓글로
-  issue_comment:
-    types: [created]                  # edited 제거
-  workflow_dispatch:                                               # 수동 트리거
+  issues: { types: [opened, labeled] }
+  issue_comment: { types: [created] }
+  workflow_dispatch:                                           # 수동 트리거
 
 permissions:                                                           # 권한
   contents: write                                                      # 콘텐츠 쓰기
