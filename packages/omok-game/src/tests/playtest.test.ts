@@ -33,7 +33,7 @@ describe('Omok Game E2E Play Tests', () => {
     // Note: GameServer doesn't expose a close method, but connections will be cleaned up
   });
 
-  const sendMessage = (client: WebSocket, message: ClientMessage): Promise<ServerMessage> => {
+  const sendMessage = (client: WebSocket, message: ClientMessage, expectedType?: MessageType): Promise<ServerMessage> => {
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
         reject(new Error('Message timeout'));
@@ -42,6 +42,12 @@ describe('Omok Game E2E Play Tests', () => {
       const messageHandler = (data: WebSocket.Data) => {
         try {
           const response: ServerMessage = JSON.parse(data.toString());
+          
+          // If we're looking for a specific message type, keep listening until we get it
+          if (expectedType && response.type !== expectedType) {
+            return; // Keep listening
+          }
+          
           clearTimeout(timeout);
           client.off('message', messageHandler);
           resolve(response);
@@ -57,7 +63,7 @@ describe('Omok Game E2E Play Tests', () => {
     });
   };
 
-  const waitForMessage = (client: WebSocket): Promise<ServerMessage> => {
+  const waitForMessage = (client: WebSocket, expectedType?: MessageType): Promise<ServerMessage> => {
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
         reject(new Error('Message timeout'));
@@ -66,6 +72,12 @@ describe('Omok Game E2E Play Tests', () => {
       const messageHandler = (data: WebSocket.Data) => {
         try {
           const response: ServerMessage = JSON.parse(data.toString());
+          
+          // If we're looking for a specific message type, keep listening until we get it
+          if (expectedType && response.type !== expectedType) {
+            return; // Keep listening
+          }
+          
           clearTimeout(timeout);
           client.off('message', messageHandler);
           resolve(response);
@@ -87,7 +99,7 @@ describe('Omok Game E2E Play Tests', () => {
       roomName: 'Test Room',
       playerName: 'Player1',
       timestamp: Date.now()
-    });
+    }, MessageType.GAME_UPDATE);
 
     expect(createRoomResponse.type).toBe(MessageType.GAME_UPDATE);
     if (createRoomResponse.type === MessageType.GAME_UPDATE) {
@@ -102,7 +114,7 @@ describe('Omok Game E2E Play Tests', () => {
       roomId: roomId,
       playerName: 'Player2',
       timestamp: Date.now()
-    });
+    }, MessageType.GAME_UPDATE);
 
     expect(joinRoomResponse.type).toBe(MessageType.GAME_UPDATE);
     if (joinRoomResponse.type === MessageType.GAME_UPDATE) {
@@ -112,7 +124,7 @@ describe('Omok Game E2E Play Tests', () => {
     }
 
     // Player 1 should also receive the game update
-    const player1Update = await waitForMessage(client1);
+    const player1Update = await waitForMessage(client1, MessageType.GAME_UPDATE);
     expect(player1Update.type).toBe(MessageType.GAME_UPDATE);
 
     // Play a winning game - horizontal line for black player
@@ -145,14 +157,14 @@ describe('Omok Game E2E Play Tests', () => {
         roomId: roomId,
         position: move.position,
         timestamp: Date.now()
-      });
+      }, MessageType.GAME_UPDATE);
 
       expect(moveResponse.type).toBe(MessageType.GAME_UPDATE);
       lastResponse = moveResponse;
 
       // The other player should also receive the update
       const otherPlayer = move.player === client1 ? client2 : client1;
-      const otherUpdate = await waitForMessage(otherPlayer);
+      const otherUpdate = await waitForMessage(otherPlayer, MessageType.GAME_UPDATE);
       expect(otherUpdate.type).toBe(MessageType.GAME_UPDATE);
     }
 
@@ -166,25 +178,25 @@ describe('Omok Game E2E Play Tests', () => {
 
   it('should prevent invalid moves', async () => {
     // Create room and have both players join
-    await sendMessage(client1, {
+    const createResponse = await sendMessage(client1, {
       type: MessageType.CREATE_ROOM,
       roomName: 'Invalid Move Test',
       playerName: 'Player1',
       timestamp: Date.now()
-    });
+    }, MessageType.GAME_UPDATE);
+
+    if (createResponse.type === MessageType.GAME_UPDATE) {
+      roomId = createResponse.room.id;
+    }
 
     const joinResponse = await sendMessage(client2, {
       type: MessageType.JOIN_ROOM,
       roomId: roomId || 'test',  
       playerName: 'Player2',
       timestamp: Date.now()
-    });
+    }, MessageType.GAME_UPDATE);
 
-    if (joinResponse.type === MessageType.GAME_UPDATE) {
-      roomId = joinResponse.room.id;
-    }
-
-    await waitForMessage(client1);
+    await waitForMessage(client1, MessageType.GAME_UPDATE);
 
     // Player 1 makes first move
     await sendMessage(client1, {
@@ -192,9 +204,9 @@ describe('Omok Game E2E Play Tests', () => {
       roomId: roomId,
       position: { row: 7, col: 7 },
       timestamp: Date.now()
-    });
+    }, MessageType.GAME_UPDATE);
 
-    await waitForMessage(client2);
+    await waitForMessage(client2, MessageType.GAME_UPDATE);
 
     // Player 1 tries to move again (should fail - not their turn)
     const invalidTurnResponse = await sendMessage(client1, {
@@ -202,7 +214,7 @@ describe('Omok Game E2E Play Tests', () => {
       roomId: roomId,
       position: { row: 8, col: 8 },
       timestamp: Date.now()
-    });
+    }, MessageType.ERROR);
 
     expect(invalidTurnResponse.type).toBe(MessageType.ERROR);
     if (invalidTurnResponse.type === MessageType.ERROR) {
@@ -215,7 +227,7 @@ describe('Omok Game E2E Play Tests', () => {
       roomId: roomId,
       position: { row: 7, col: 7 }, // Same position as Player 1
       timestamp: Date.now()
-    });
+    }, MessageType.ERROR);
 
     expect(occupiedPositionResponse.type).toBe(MessageType.ERROR);
     if (occupiedPositionResponse.type === MessageType.ERROR) {
@@ -230,7 +242,7 @@ describe('Omok Game E2E Play Tests', () => {
       roomName: 'Disconnect Test',
       playerName: 'Player1',
       timestamp: Date.now()
-    });
+    }, MessageType.GAME_UPDATE);
 
     if (createResponse.type === MessageType.GAME_UPDATE) {
       roomId = createResponse.room.id;
@@ -241,19 +253,19 @@ describe('Omok Game E2E Play Tests', () => {
       roomId: roomId,
       playerName: 'Player2', 
       timestamp: Date.now()
-    });
+    }, MessageType.GAME_UPDATE);
 
-    await waitForMessage(client1);
+    await waitForMessage(client1, MessageType.GAME_UPDATE);
 
     // Player 1 leaves the room
     await sendMessage(client1, {
       type: MessageType.LEAVE_ROOM,
       roomId: roomId,
       timestamp: Date.now()
-    });
+    }, MessageType.GAME_UPDATE);
 
     // Player 2 should receive an update showing the room now has only 1 player
-    const updateAfterLeave = await waitForMessage(client2);
+    const updateAfterLeave = await waitForMessage(client2, MessageType.GAME_UPDATE);
     expect(updateAfterLeave.type).toBe(MessageType.GAME_UPDATE);
     if (updateAfterLeave.type === MessageType.GAME_UPDATE) {
       expect(updateAfterLeave.room.players).toHaveLength(1);

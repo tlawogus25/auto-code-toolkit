@@ -1,0 +1,659 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Omok Game - React Demo</title>
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 0;
+            padding: 0;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+        }
+        .game-board-container {
+            display: inline-block;
+            background: linear-gradient(135deg, #8B4513 0%, #A0522D 100%);
+            padding: 1.5rem;
+            border-radius: 1rem;
+            box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+            border: 4px solid #654321;
+        }
+        .board-grid {
+            display: grid;
+            grid-template-columns: repeat(15, 1fr);
+            gap: 1px;
+            background: #654321;
+            padding: 8px;
+            border-radius: 8px;
+            box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+        .board-cell {
+            width: 28px;
+            height: 28px;
+            background: linear-gradient(135deg, #DEB887 0%, #D2B48C 100%);
+            border: 1px solid #8B7355;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.15s ease;
+            position: relative;
+        }
+        .board-cell:hover {
+            background: linear-gradient(135deg, #F0E68C 0%, #E6D76A 100%);
+            transform: scale(1.05);
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+        }
+        .board-cell:disabled {
+            cursor: not-allowed;
+            opacity: 0.6;
+        }
+        .stone {
+            width: 22px;
+            height: 22px;
+            border-radius: 50%;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+            transition: all 0.2s ease;
+        }
+        .stone.black {
+            background: radial-gradient(circle at 30% 30%, #404040, #000000);
+        }
+        .stone.white {
+            background: radial-gradient(circle at 30% 30%, #ffffff, #e0e0e0);
+            border: 1px solid #ccc;
+        }
+        .stone:hover {
+            transform: scale(1.1);
+        }
+        
+        /* Lines on the board */
+        .board-cell::before {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 100%;
+            height: 1px;
+            background: #8B7355;
+            transform: translate(-50%, -50%);
+        }
+        .board-cell::after {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            height: 100%;
+            width: 1px;
+            background: #8B7355;
+            transform: translate(-50%, -50%);
+        }
+        
+        /* Special points on the board */
+        .star-point::before {
+            width: 6px;
+            height: 6px;
+            background: #654321;
+            border-radius: 50%;
+            z-index: 1;
+        }
+        
+        .connection-status {
+            position: fixed;
+            top: 1rem;
+            right: 1rem;
+            padding: 0.5rem 1rem;
+            border-radius: 9999px;
+            font-weight: 600;
+            font-size: 0.875rem;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+            z-index: 50;
+        }
+        
+        .connected {
+            background: #10B981;
+            color: white;
+        }
+        
+        .disconnected {
+            background: #EF4444;
+            color: white;
+        }
+        
+        .loading {
+            background: #F59E0B;
+            color: white;
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useCallback } = React;
+
+        // Simple state management
+        const gameState = {
+            rooms: [],
+            currentRoom: null,
+            playerId: null,
+            playerName: null,
+            isConnected: false,
+            ws: null,
+            listeners: new Set(),
+            
+            setState(newState) {
+                Object.assign(this, newState);
+                this.notifyListeners();
+            },
+            
+            subscribe(listener) {
+                this.listeners.add(listener);
+                return () => this.listeners.delete(listener);
+            },
+            
+            notifyListeners() {
+                this.listeners.forEach(listener => listener());
+            }
+        };
+
+        // WebSocket client
+        const connectToServer = () => {
+            const ws = new WebSocket('ws://localhost:8080');
+            
+            ws.onopen = () => {
+                console.log('Connected to Omok server');
+                gameState.setState({ isConnected: true, ws });
+            };
+            
+            ws.onmessage = (event) => {
+                const message = JSON.parse(event.data);
+                console.log('Received:', message);
+                handleServerMessage(message);
+            };
+            
+            ws.onclose = () => {
+                console.log('Disconnected from server');
+                gameState.setState({ isConnected: false, ws: null });
+            };
+            
+            ws.onerror = (error) => {
+                console.error('WebSocket error:', error);
+            };
+            
+            return ws;
+        };
+
+        const sendMessage = (message) => {
+            if (gameState.ws && gameState.ws.readyState === WebSocket.OPEN) {
+                message.timestamp = Date.now();
+                gameState.ws.send(JSON.stringify(message));
+                console.log('Sent:', message);
+            }
+        };
+
+        const handleServerMessage = (message) => {
+            switch (message.type) {
+                case 'game_update':
+                    gameState.setState({ currentRoom: message.room });
+                    break;
+                case 'room_list':
+                    gameState.setState({ rooms: message.rooms });
+                    break;
+                case 'error':
+                    alert(`Error: ${message.message}`);
+                    break;
+            }
+        };
+
+        // Custom hook for game state
+        const useGameState = () => {
+            const [, forceUpdate] = useState({});
+            
+            useEffect(() => {
+                const unsubscribe = gameState.subscribe(() => {
+                    forceUpdate({});
+                });
+                return unsubscribe;
+            }, []);
+            
+            return gameState;
+        };
+
+        // Game Board Component
+        const GameBoard = ({ board, onCellClick, disabled, currentPlayer }) => {
+            const getStarPoints = () => {
+                return [
+                    [3, 3], [3, 11], [7, 7], [11, 3], [11, 11]
+                ];
+            };
+            
+            const isStarPoint = (row, col) => {
+                return getStarPoints().some(([r, c]) => r === row && c === col);
+            };
+
+            return (
+                <div className="game-board-container">
+                    <div className="board-grid">
+                        {board.map((row, rowIndex) =>
+                            row.map((cell, colIndex) => (
+                                <div
+                                    key={`${rowIndex}-${colIndex}`}
+                                    className={`board-cell ${isStarPoint(rowIndex, colIndex) ? 'star-point' : ''}`}
+                                    onClick={() => !disabled && onCellClick(rowIndex, colIndex)}
+                                    style={{ cursor: disabled ? 'not-allowed' : 'pointer' }}
+                                >
+                                    {cell && (
+                                        <div className={`stone ${cell}`} />
+                                    )}
+                                </div>
+                            ))
+                        )}
+                    </div>
+                    
+                    {currentPlayer && !disabled && (
+                        <div className="mt-4 text-center">
+                            <div className="inline-flex items-center px-4 py-2 rounded-full bg-white bg-opacity-90 backdrop-blur-sm">
+                                <div className={`w-4 h-4 rounded-full mr-2 ${currentPlayer === 'black' ? 'bg-black' : 'bg-white border border-gray-400'}`} />
+                                <span className="font-semibold text-gray-800">
+                                    {currentPlayer === 'black' ? 'Black' : 'White'} Player's Turn
+                                </span>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        // Room Manager Component
+        const RoomManager = () => {
+            const [showCreateForm, setShowCreateForm] = useState(false);
+            const [roomName, setRoomName] = useState('');
+            const [playerName, setPlayerName] = useState('');
+            const [joinPlayerName, setJoinPlayerName] = useState('');
+            const state = useGameState();
+
+            const createRoom = () => {
+                if (roomName.trim() && playerName.trim()) {
+                    sendMessage({
+                        type: 'create_room',
+                        roomName: roomName.trim(),
+                        playerName: playerName.trim()
+                    });
+                    gameState.setState({ playerName: playerName.trim() });
+                    setRoomName('');
+                    setPlayerName('');
+                    setShowCreateForm(false);
+                }
+            };
+
+            const joinRoom = (roomId) => {
+                if (joinPlayerName.trim()) {
+                    sendMessage({
+                        type: 'join_room',
+                        roomId,
+                        playerName: joinPlayerName.trim()
+                    });
+                    gameState.setState({ playerName: joinPlayerName.trim() });
+                    setJoinPlayerName('');
+                }
+            };
+
+            const getStatusColor = (status) => {
+                switch (status) {
+                    case 'waiting': return 'text-yellow-600 bg-yellow-100';
+                    case 'in_progress': return 'text-green-600 bg-green-100';
+                    case 'finished': return 'text-gray-600 bg-gray-100';
+                    default: return 'text-gray-500 bg-gray-100';
+                }
+            };
+
+            const getStatusText = (status) => {
+                switch (status) {
+                    case 'waiting': return 'Waiting for players';
+                    case 'in_progress': return 'Game in progress';
+                    case 'finished': return 'Game finished';
+                    default: return 'Unknown';
+                }
+            };
+
+            return (
+                <div className="max-w-4xl mx-auto p-6">
+                    <div className="bg-white bg-opacity-95 backdrop-blur-sm rounded-2xl shadow-xl p-8">
+                        <h1 className="text-4xl font-bold text-center text-gray-800 mb-8">
+                            🏁 Omok Game Rooms
+                        </h1>
+                        
+                        <div className="text-center mb-8">
+                            <button
+                                onClick={() => setShowCreateForm(!showCreateForm)}
+                                className="bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 text-white px-8 py-3 rounded-full font-semibold transition-all transform hover:scale-105 shadow-lg"
+                            >
+                                {showCreateForm ? 'Cancel' : '🆕 Create New Room'}
+                            </button>
+                        </div>
+
+                        {showCreateForm && (
+                            <div className="bg-gradient-to-r from-blue-50 to-indigo-50 rounded-xl p-6 mb-8 border border-blue-200">
+                                <h2 className="text-2xl font-semibold mb-6 text-blue-800">Create New Room</h2>
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                    <div>
+                                        <label className="block text-sm font-medium text-gray-700 mb-2">Room Name</label>
+                                        <input
+                                            type="text"
+                                            value={roomName}
+                                            onChange={(e) => setRoomName(e.target.value)}
+                                            className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                                            placeholder="Enter room name"
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm font-medium text-gray-700 mb-2">Your Name</label>
+                                        <input
+                                            type="text"
+                                            value={playerName}
+                                            onChange={(e) => setPlayerName(e.target.value)}
+                                            className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                                            placeholder="Enter your name"
+                                        />
+                                    </div>
+                                </div>
+                                <div className="mt-6">
+                                    <button
+                                        onClick={createRoom}
+                                        disabled={!roomName.trim() || !playerName.trim()}
+                                        className="bg-gradient-to-r from-green-500 to-green-600 hover:from-green-600 hover:to-green-700 disabled:from-gray-300 disabled:to-gray-400 disabled:cursor-not-allowed text-white px-8 py-3 rounded-full font-semibold transition-all shadow-lg"
+                                    >
+                                        🚀 Create Room
+                                    </button>
+                                </div>
+                            </div>
+                        )}
+
+                        <div className="mb-6">
+                            <label className="block text-sm font-medium text-gray-700 mb-2">Your Name (for joining rooms)</label>
+                            <input
+                                type="text"
+                                value={joinPlayerName}
+                                onChange={(e) => setJoinPlayerName(e.target.value)}
+                                className="w-full max-w-md px-4 py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                                placeholder="Enter your name to join rooms"
+                            />
+                        </div>
+
+                        <div className="bg-white rounded-xl shadow-md border border-gray-200">
+                            <div className="px-6 py-4 border-b border-gray-200 bg-gradient-to-r from-gray-50 to-gray-100 rounded-t-xl">
+                                <h2 className="text-xl font-semibold text-gray-800">
+                                    🏠 Available Rooms ({state.rooms.length})
+                                </h2>
+                            </div>
+                            
+                            {state.rooms.length === 0 ? (
+                                <div className="p-8 text-center text-gray-500">
+                                    <div className="text-6xl mb-4">🎯</div>
+                                    <div className="text-lg">No rooms available.</div>
+                                    <div className="text-sm">Create one to get started!</div>
+                                </div>
+                            ) : (
+                                <div className="divide-y divide-gray-100">
+                                    {state.rooms.map((room) => (
+                                        <div key={room.id} className="p-6 hover:bg-gray-50 transition-colors">
+                                            <div className="flex items-center justify-between">
+                                                <div className="flex-1">
+                                                    <h3 className="text-lg font-medium text-gray-900 mb-2">
+                                                        {room.name}
+                                                    </h3>
+                                                    <div className="flex items-center space-x-4">
+                                                        <span className={`px-3 py-1 rounded-full text-sm font-medium ${getStatusColor(room.gameState.status)}`}>
+                                                            {getStatusText(room.gameState.status)}
+                                                        </span>
+                                                        <span className="text-sm text-gray-500">
+                                                            👥 {room.players.length}/{room.maxPlayers} players
+                                                        </span>
+                                                        {room.players.length > 0 && (
+                                                            <span className="text-sm text-gray-500">
+                                                                🏷️ {room.players.map(p => p.name).join(', ')}
+                                                            </span>
+                                                        )}
+                                                    </div>
+                                                </div>
+                                                
+                                                <div className="ml-6">
+                                                    {room.players.length < room.maxPlayers && room.gameState.status === 'waiting' ? (
+                                                        <button
+                                                            onClick={() => joinRoom(room.id)}
+                                                            disabled={!joinPlayerName.trim()}
+                                                            className="bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 disabled:from-gray-300 disabled:to-gray-400 disabled:cursor-not-allowed text-white px-6 py-2 rounded-full font-medium transition-all shadow-md"
+                                                        >
+                                                            Join Room
+                                                        </button>
+                                                    ) : (
+                                                        <span className="text-sm text-gray-400 px-6 py-2">
+                                                            {room.players.length >= room.maxPlayers ? 'Room Full' : 'In Progress'}
+                                                        </span>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        // Game Status Component
+        const GameStatus = ({ room, onLeaveRoom }) => {
+            const getStatusMessage = () => {
+                const { gameState, players } = room;
+                
+                switch (gameState.status) {
+                    case 'waiting':
+                        return 'Waiting for another player to join...';
+                    case 'in_progress':
+                        if (gameState.winner) {
+                            const winnerPlayer = players.find(p => p.color === gameState.winner);
+                            return `🏆 Game Over! ${winnerPlayer?.name || 'Unknown'} (${gameState.winner}) wins!`;
+                        }
+                        const currentPlayerName = players.find(p => p.color === gameState.currentPlayer)?.name || 'Unknown';
+                        return `${currentPlayerName}'s turn (${gameState.currentPlayer})`;
+                    case 'finished':
+                        if (gameState.winner) {
+                            const winnerPlayer = players.find(p => p.color === gameState.winner);
+                            return `🎉 Game Over! ${winnerPlayer?.name || 'Unknown'} (${gameState.winner}) wins!`;
+                        }
+                        return `Game Over! It's a draw!`;
+                    default:
+                        return 'Unknown game status';
+                }
+            };
+
+            const getStatusColor = () => {
+                switch (room.gameState.status) {
+                    case 'waiting': return 'text-yellow-700 bg-yellow-100 border-yellow-300';
+                    case 'in_progress': return 'text-blue-700 bg-blue-100 border-blue-300';
+                    case 'finished': return 'text-purple-700 bg-purple-100 border-purple-300';
+                    default: return 'text-gray-700 bg-gray-100 border-gray-300';
+                }
+            };
+
+            return (
+                <div className="bg-white bg-opacity-95 backdrop-blur-sm rounded-2xl shadow-xl p-6 space-y-6">
+                    <div className="text-center">
+                        <h2 className="text-2xl font-bold text-gray-800 mb-4">
+                            {room.name}
+                        </h2>
+                        <div className={`inline-flex items-center px-4 py-2 rounded-full border-2 text-sm font-semibold ${getStatusColor()}`}>
+                            {getStatusMessage()}
+                        </div>
+                    </div>
+
+                    <div className="space-y-3">
+                        <h3 className="text-lg font-semibold text-gray-800">👥 Players</h3>
+                        {room.players.map((player, index) => (
+                            <div
+                                key={player.id}
+                                className="flex items-center space-x-3 p-4 rounded-xl border-2 border-gray-200 bg-gradient-to-r from-white to-gray-50"
+                            >
+                                <div className={`w-6 h-6 rounded-full ${player.color === 'black' ? 'bg-black' : 'bg-white border-2 border-gray-400'}`} />
+                                <div className="flex-1">
+                                    <span className="font-medium text-gray-800">
+                                        {player.name}
+                                    </span>
+                                    <div className="text-sm text-gray-500 capitalize">
+                                        {player.color} stones
+                                    </div>
+                                </div>
+                                {room.gameState.currentPlayer === player.color && room.gameState.status === 'in_progress' && (
+                                    <div className="text-sm font-medium text-green-600 bg-green-100 px-3 py-1 rounded-full">
+                                        Active
+                                    </div>
+                                )}
+                            </div>
+                        ))}
+                    </div>
+
+                    {room.gameState.moves.length > 0 && (
+                        <div className="space-y-3">
+                            <h3 className="text-lg font-semibold text-gray-800">📊 Game Info</h3>
+                            <div className="bg-gradient-to-r from-gray-50 to-gray-100 rounded-xl p-4">
+                                <div className="grid grid-cols-2 gap-4 text-sm">
+                                    <div>
+                                        <span className="text-gray-600">Total Moves:</span>
+                                        <span className="ml-2 font-bold text-blue-600">{room.gameState.moves.length}</span>
+                                    </div>
+                                    <div>
+                                        <span className="text-gray-600">Room ID:</span>
+                                        <span className="ml-2 font-mono text-xs text-gray-500">{room.id.slice(0, 8)}...</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {room.gameState.status === 'finished' && room.gameState.winner && (
+                        <div className="bg-gradient-to-r from-yellow-400 to-orange-400 rounded-xl p-6 text-center">
+                            <div className="text-white text-2xl font-bold mb-2">
+                                🏆 Victory! 🏆
+                            </div>
+                            <div className="text-white text-lg">
+                                {room.players.find(p => p.color === room.gameState.winner)?.name} wins with {room.gameState.winner} stones!
+                            </div>
+                        </div>
+                    )}
+
+                    <div className="pt-4 border-t border-gray-200">
+                        <button
+                            onClick={onLeaveRoom}
+                            className="w-full bg-gradient-to-r from-red-500 to-red-600 hover:from-red-600 hover:to-red-700 text-white py-3 px-6 rounded-xl font-semibold transition-all shadow-lg"
+                        >
+                            🚪 Leave Room
+                        </button>
+                    </div>
+                </div>
+            );
+        };
+
+        // Main App Component
+        const OmokApp = () => {
+            const state = useGameState();
+
+            useEffect(() => {
+                const ws = connectToServer();
+                return () => {
+                    if (ws) ws.close();
+                };
+            }, []);
+
+            const handleMakeMove = (row, col) => {
+                if (!state.currentRoom) return;
+                
+                sendMessage({
+                    type: 'make_move',
+                    roomId: state.currentRoom.id,
+                    position: { row, col }
+                });
+            };
+
+            const handleLeaveRoom = () => {
+                if (state.currentRoom) {
+                    sendMessage({
+                        type: 'leave_room',
+                        roomId: state.currentRoom.id
+                    });
+                    gameState.setState({ currentRoom: null });
+                }
+            };
+
+            const getConnectionStatus = () => {
+                if (state.isConnected) return { text: '🟢 Connected', class: 'connected' };
+                return { text: '🔴 Disconnected', class: 'disconnected' };
+            };
+
+            const connectionStatus = getConnectionStatus();
+
+            return (
+                <div className="min-h-screen">
+                    {/* Connection Status */}
+                    <div className={`connection-status ${connectionStatus.class}`}>
+                        {connectionStatus.text}
+                    </div>
+
+                    {!state.isConnected ? (
+                        <div className="min-h-screen flex items-center justify-center">
+                            <div className="text-center bg-white bg-opacity-95 backdrop-blur-sm rounded-2xl p-8 shadow-xl">
+                                <div className="animate-spin rounded-full h-16 w-16 border-b-4 border-blue-500 mx-auto mb-6"></div>
+                                <h2 className="text-2xl font-semibold text-gray-700 mb-2">Connecting to Omok Server...</h2>
+                                <p className="text-gray-500">Please wait while we establish connection</p>
+                            </div>
+                        </div>
+                    ) : !state.currentRoom ? (
+                        <div className="py-8">
+                            <RoomManager />
+                        </div>
+                    ) : (
+                        <div className="min-h-screen py-8 px-4">
+                            <div className="max-w-7xl mx-auto">
+                                <div className="grid grid-cols-1 xl:grid-cols-4 gap-8">
+                                    {/* Game Status Sidebar */}
+                                    <div className="xl:col-span-1 order-2 xl:order-1">
+                                        <GameStatus
+                                            room={state.currentRoom}
+                                            onLeaveRoom={handleLeaveRoom}
+                                        />
+                                    </div>
+
+                                    {/* Game Board */}
+                                    <div className="xl:col-span-3 order-1 xl:order-2 flex justify-center">
+                                        <div className="text-center">
+                                            <GameBoard
+                                                board={state.currentRoom.gameState.board}
+                                                onCellClick={handleMakeMove}
+                                                disabled={
+                                                    state.currentRoom.gameState.status !== 'in_progress' ||
+                                                    state.currentRoom.players.length < 2
+                                                }
+                                                currentPlayer={state.currentRoom.gameState.currentPlayer}
+                                            />
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        // Render the app
+        ReactDOM.render(<OmokApp />, document.getElementById('root'));
+    </script>
+</body>
+</html>

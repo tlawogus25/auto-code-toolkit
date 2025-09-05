@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Omok Game Test Client</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .container {
+            display: flex;
+            gap: 20px;
+        }
+        .panel {
+            flex: 1;
+            border: 1px solid #ddd;
+            padding: 15px;
+            border-radius: 8px;
+        }
+        .game-board {
+            display: grid;
+            grid-template-columns: repeat(15, 20px);
+            gap: 1px;
+            background: #8B4513;
+            padding: 10px;
+            border-radius: 5px;
+            margin: 20px 0;
+        }
+        .cell {
+            width: 20px;
+            height: 20px;
+            background: #D2691E;
+            border: 1px solid #8B4513;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+        }
+        .stone {
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+        }
+        .black { background: #000; }
+        .white { background: #fff; border: 1px solid #333; }
+        .log {
+            height: 300px;
+            overflow-y: scroll;
+            border: 1px solid #ccc;
+            padding: 10px;
+            font-family: monospace;
+            font-size: 12px;
+            background: #f5f5f5;
+        }
+        .controls {
+            margin: 10px 0;
+        }
+        .controls input, .controls button {
+            margin: 5px;
+            padding: 5px 10px;
+        }
+        .status {
+            font-weight: bold;
+            padding: 10px;
+            border-radius: 5px;
+            margin: 10px 0;
+        }
+        .connected { background: #d4edda; color: #155724; }
+        .disconnected { background: #f8d7da; color: #721c24; }
+    </style>
+</head>
+<body>
+    <h1>🏁 Omok Game Test Client</h1>
+    
+    <div class="container">
+        <div class="panel">
+            <h2>Connection</h2>
+            <div id="status" class="status disconnected">Disconnected</div>
+            
+            <div class="controls">
+                <button id="connect">Connect</button>
+                <button id="disconnect" disabled>Disconnect</button>
+            </div>
+            
+            <h3>Room Controls</h3>
+            <div class="controls">
+                <input type="text" id="roomName" placeholder="Room Name" value="Test Room">
+                <input type="text" id="playerName" placeholder="Player Name" value="Player1">
+                <br>
+                <button id="createRoom" disabled>Create Room</button>
+                <input type="text" id="joinRoomId" placeholder="Room ID to join">
+                <button id="joinRoom" disabled>Join Room</button>
+            </div>
+            
+            <h3>Game Info</h3>
+            <div id="gameInfo">
+                <p>Current Player: <span id="currentPlayer">-</span></p>
+                <p>Game Status: <span id="gameStatus">-</span></p>
+                <p>Room ID: <span id="roomIdDisplay">-</span></p>
+            </div>
+        </div>
+        
+        <div class="panel">
+            <h2>Game Board</h2>
+            <div id="gameBoard" class="game-board"></div>
+        </div>
+        
+        <div class="panel">
+            <h2>Message Log</h2>
+            <div id="log" class="log"></div>
+            <button onclick="clearLog()">Clear Log</button>
+        </div>
+    </div>
+
+    <script>
+        let ws = null;
+        let currentRoomId = null;
+        let gameState = null;
+        
+        const statusEl = document.getElementById('status');
+        const logEl = document.getElementById('log');
+        const boardEl = document.getElementById('gameBoard');
+        const currentPlayerEl = document.getElementById('currentPlayer');
+        const gameStatusEl = document.getElementById('gameStatus');
+        const roomIdDisplayEl = document.getElementById('roomIdDisplay');
+        
+        // Create board cells
+        for (let row = 0; row < 15; row++) {
+            for (let col = 0; col < 15; col++) {
+                const cell = document.createElement('div');
+                cell.className = 'cell';
+                cell.dataset.row = row;
+                cell.dataset.col = col;
+                cell.onclick = () => makeMove(row, col);
+                boardEl.appendChild(cell);
+            }
+        }
+        
+        function log(message) {
+            const time = new Date().toLocaleTimeString();
+            logEl.innerHTML += `[${time}] ${message}\n`;
+            logEl.scrollTop = logEl.scrollHeight;
+        }
+        
+        function clearLog() {
+            logEl.innerHTML = '';
+        }
+        
+        function updateStatus(connected) {
+            statusEl.textContent = connected ? 'Connected' : 'Disconnected';
+            statusEl.className = `status ${connected ? 'connected' : 'disconnected'}`;
+            
+            document.getElementById('connect').disabled = connected;
+            document.getElementById('disconnect').disabled = !connected;
+            document.getElementById('createRoom').disabled = !connected;
+            document.getElementById('joinRoom').disabled = !connected;
+        }
+        
+        function connect() {
+            ws = new WebSocket('ws://localhost:8080');
+            
+            ws.onopen = () => {
+                log('Connected to server');
+                updateStatus(true);
+            };
+            
+            ws.onmessage = (event) => {
+                const message = JSON.parse(event.data);
+                log(`Received: ${message.type} - ${JSON.stringify(message)}`);
+                handleMessage(message);
+            };
+            
+            ws.onclose = () => {
+                log('Disconnected from server');
+                updateStatus(false);
+            };
+            
+            ws.onerror = (error) => {
+                log(`Error: ${error}`);
+            };
+        }
+        
+        function disconnect() {
+            if (ws) {
+                ws.close();
+            }
+        }
+        
+        function sendMessage(message) {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                message.timestamp = Date.now();
+                ws.send(JSON.stringify(message));
+                log(`Sent: ${message.type} - ${JSON.stringify(message)}`);
+            } else {
+                log('Not connected to server');
+            }
+        }
+        
+        function createRoom() {
+            const roomName = document.getElementById('roomName').value;
+            const playerName = document.getElementById('playerName').value;
+            
+            if (!roomName || !playerName) {
+                alert('Please enter room name and player name');
+                return;
+            }
+            
+            sendMessage({
+                type: 'create_room',
+                roomName: roomName,
+                playerName: playerName
+            });
+        }
+        
+        function joinRoom() {
+            const roomId = document.getElementById('joinRoomId').value;
+            const playerName = document.getElementById('playerName').value;
+            
+            if (!roomId || !playerName) {
+                alert('Please enter room ID and player name');
+                return;
+            }
+            
+            sendMessage({
+                type: 'join_room',
+                roomId: roomId,
+                playerName: playerName
+            });
+        }
+        
+        function makeMove(row, col) {
+            if (!currentRoomId) {
+                log('Not in a room');
+                return;
+            }
+            
+            sendMessage({
+                type: 'make_move',
+                roomId: currentRoomId,
+                position: { row: row, col: col }
+            });
+        }
+        
+        function handleMessage(message) {
+            switch (message.type) {
+                case 'game_update':
+                    handleGameUpdate(message);
+                    break;
+                case 'room_list':
+                    handleRoomList(message);
+                    break;
+                case 'error':
+                    log(`Error: ${message.message}`);
+                    break;
+            }
+        }
+        
+        function handleGameUpdate(message) {
+            currentRoomId = message.room.id;
+            gameState = message.gameState;
+            
+            roomIdDisplayEl.textContent = currentRoomId;
+            currentPlayerEl.textContent = gameState.currentPlayer;
+            gameStatusEl.textContent = gameState.status;
+            
+            updateBoard();
+            
+            if (gameState.winner) {
+                log(`Game over! Winner: ${gameState.winner}`);
+            }
+        }
+        
+        function handleRoomList(message) {
+            log(`Available rooms: ${message.rooms.length}`);
+            message.rooms.forEach(room => {
+                log(`  - ${room.name} (${room.id}): ${room.players.length}/${room.maxPlayers} players`);
+            });
+        }
+        
+        function updateBoard() {
+            if (!gameState) return;
+            
+            const cells = document.querySelectorAll('.cell');
+            cells.forEach(cell => {
+                const row = parseInt(cell.dataset.row);
+                const col = parseInt(cell.dataset.col);
+                const stone = gameState.board[row][col];
+                
+                cell.innerHTML = '';
+                if (stone) {
+                    const stoneEl = document.createElement('div');
+                    stoneEl.className = `stone ${stone}`;
+                    cell.appendChild(stoneEl);
+                }
+            });
+        }
+        
+        // Event listeners
+        document.getElementById('connect').onclick = connect;
+        document.getElementById('disconnect').onclick = disconnect;
+        document.getElementById('createRoom').onclick = createRoom;
+        document.getElementById('joinRoom').onclick = joinRoom;
+        
+        // Auto-connect on load
+        connect();
+    </script>
+</body>
+</html>
