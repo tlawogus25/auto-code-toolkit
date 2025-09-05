@@ -88,7 +88,6 @@ export async function runOrchestrator({ repoRoot, configPath, eventPath }) {    
   writeRunMeta();                                                                      // 초기 메타 저장
 
   for (const t of seq) { const h = tokens.get(t.toLowerCase()); if (h) await h(ctx); } // 토큰 핸들러
-
   const highCost = labels.includes(labelsCfg.highCost || "automation:high-cost");     // 고비용 라벨
   const max = policy.hard_stop_chars_without_high_cost_label ?? 20000;                // 입력 상한
   const planThreshold = policy.plan_only_threshold_chars ?? 8000;                     // 플랜 상한
@@ -335,4 +334,3 @@ export async function runOrchestrator({ repoRoot, configPath, eventPath }) {    
   appendStage("done", true, { longMode: ctx.longMode });                                   // 완료 기록
 
   return { success: true, branch: ctx.branch, long: ctx.longMode, usage: ctx.usageTotals, prNumber: ctx.prNumber }; // 반환
-}                                                                                          // 함수 끝
