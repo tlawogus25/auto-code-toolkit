@@ -36,6 +36,12 @@ export class GameServer {
     console.log(`Omok game server started on port ${port}`);
   }
 
+  public close(): void {
+    this.wss.close();
+    this.clients.clear();
+    this.rooms.clear();
+  }
+
   private setupWebSocket(): void {
     this.wss.on('connection', (ws: WebSocket) => {
       const playerId = this.generatePlayerId();
