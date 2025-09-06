@@ -188,4 +188,121 @@ describe('Omok Game E2E Play Tests', () => {
     client1.close();
     expect(true).toBe(true);
   }, 10000);
+
+  it('should correctly track game state across multiple rooms', async () => {
+    // Create first room
+    client1.send(JSON.stringify({
+      type: MessageType.CREATE_ROOM,
+      roomName: 'Room1',
+      playerName: 'Player1',
+      timestamp: Date.now()
+    }));
+
+    const room1Response = await waitForSpecificMessage(client1, MessageType.GAME_UPDATE);
+    let room1Id = '';
+    if (room1Response.type === MessageType.GAME_UPDATE) {
+      room1Id = room1Response.room.id;
+      expect(room1Response.room.name).toBe('Room1');
+      expect(room1Response.room.players).toHaveLength(1);
+      expect(room1Response.gameState.status).toBe('waiting');
+    }
+
+    // Create second room with second client
+    client2.send(JSON.stringify({
+      type: MessageType.CREATE_ROOM,
+      roomName: 'Room2',
+      playerName: 'Player2',
+      timestamp: Date.now()
+    }));
+
+    const room2Response = await waitForSpecificMessage(client2, MessageType.GAME_UPDATE);
+    let room2Id = '';
+    if (room2Response.type === MessageType.GAME_UPDATE) {
+      room2Id = room2Response.room.id;
+      expect(room2Response.room.name).toBe('Room2');
+      expect(room2Response.room.players).toHaveLength(1);
+      expect(room2Response.gameState.status).toBe('waiting');
+      expect(room2Id).not.toBe(room1Id); // Rooms should have different IDs
+    }
+
+    // Verify rooms are independent
+    expect(room1Id).toBeTruthy();
+    expect(room2Id).toBeTruthy();
+    expect(room1Id).not.toBe(room2Id);
+  }, 10000);
+
+  it('should handle invalid move attempts gracefully', async () => {
+    // Create room and join players
+    client1.send(JSON.stringify({
+      type: MessageType.CREATE_ROOM,
+      roomName: 'Invalid Move Test',
+      playerName: 'Player1',
+      timestamp: Date.now()
+    }));
+
+    const createResponse = await waitForSpecificMessage(client1, MessageType.GAME_UPDATE);
+    let testRoomId = '';
+    if (createResponse.type === MessageType.GAME_UPDATE) {
+      testRoomId = createResponse.room.id;
+    }
+
+    client2.send(JSON.stringify({
+      type: MessageType.JOIN_ROOM,
+      roomId: testRoomId,
+      playerName: 'Player2',
+      timestamp: Date.now()
+    }));
+
+    await waitForSpecificMessage(client2, MessageType.GAME_UPDATE);
+
+    // Player 1 makes valid move
+    client1.send(JSON.stringify({
+      type: MessageType.MAKE_MOVE,
+      roomId: testRoomId,
+      position: { row: 7, col: 7 },
+      timestamp: Date.now()
+    }));
+
+    await waitForSpecificMessage(client1, MessageType.GAME_UPDATE);
+
+    // Player 2 attempts to place stone in same position
+    client2.send(JSON.stringify({
+      type: MessageType.MAKE_MOVE,
+      roomId: testRoomId,
+      position: { row: 7, col: 7 }, // Same position as player 1
+      timestamp: Date.now()
+    }));
+
+    // Should receive error message
+    const errorResponse = await waitForSpecificMessage(client2, MessageType.ERROR);
+    expect(errorResponse.type).toBe(MessageType.ERROR);
+    if (errorResponse.type === MessageType.ERROR) {
+      expect(errorResponse.message).toContain('occupied');
+    }
+
+    // Player 2 attempts invalid position (out of bounds)
+    client2.send(JSON.stringify({
+      type: MessageType.MAKE_MOVE,
+      roomId: testRoomId,
+      position: { row: 15, col: 15 }, // Out of bounds
+      timestamp: Date.now()
+    }));
+
+    const errorResponse2 = await waitForSpecificMessage(client2, MessageType.ERROR);
+    expect(errorResponse2.type).toBe(MessageType.ERROR);
+
+    // Player 2 makes valid move
+    client2.send(JSON.stringify({
+      type: MessageType.MAKE_MOVE,
+      roomId: testRoomId,
+      position: { row: 8, col: 8 },
+      timestamp: Date.now()
+    }));
+
+    const validResponse = await waitForSpecificMessage(client2, MessageType.GAME_UPDATE);
+    if (validResponse.type === MessageType.GAME_UPDATE) {
+      expect(validResponse.gameState.moves).toHaveLength(2);
+      expect(validResponse.gameState.currentPlayer).toBe('black');
+    }
+  }, 15000);
 });

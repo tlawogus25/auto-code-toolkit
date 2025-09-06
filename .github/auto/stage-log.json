@@ -192,5 +192,102 @@
       "ok": true
     },
     "ts": "2025-09-05T20:52:49.078Z"
+  },
+  {
+    "stage": "bootstrap",
+    "ok": true,
+    "details": {
+      "hasAuto": true,
+      "hasRunLabel": true
+    },
+    "ts": "2025-09-06T13:46:24.157Z"
+  },
+  {
+    "stage": "route:pre",
+    "ok": true,
+    "details": {
+      "planOnly": false
+    },
+    "ts": "2025-09-06T13:46:24.158Z"
+  },
+  {
+    "stage": "route:selected",
+    "ok": true,
+    "details": {
+      "llm": "openai",
+      "model": "gpt-4o",
+      "agent": "cursor"
+    },
+    "ts": "2025-09-06T13:46:24.158Z"
+  },
+  {
+    "stage": "hooks:beforeLLM",
+    "ok": true,
+    "details": null,
+    "ts": "2025-09-06T13:46:24.158Z"
+  },
+  {
+    "stage": "llm:openai",
+    "ok": true,
+    "details": {
+      "model": "gpt-4o"
+    },
+    "ts": "2025-09-06T13:46:30.162Z"
+  },
+  {
+    "stage": "llm:prompt-ready",
+    "ok": true,
+    "details": {
+      "length": 871
+    },
+    "ts": "2025-09-06T13:46:30.163Z"
+  },
+  {
+    "stage": "hooks:afterLLM",
+    "ok": true,
+    "details": null,
+    "ts": "2025-09-06T13:46:30.163Z"
+  },
+  {
+    "stage": "git:branch",
+    "ok": true,
+    "details": {
+      "branch": "auto/1757166390213"
+    },
+    "ts": "2025-09-06T13:46:30.230Z"
+  },
+  {
+    "stage": "hooks:beforeAgent",
+    "ok": true,
+    "details": {
+      "step": 1
+    },
+    "ts": "2025-09-06T13:46:30.231Z"
+  },
+  {
+    "stage": "agent:primary",
+    "ok": false,
+    "details": {
+      "used": "cursor",
+      "error": "Command failed: cursor-agent -p \"=== SAFETY RULES ===\\n- Do NOT execute shell or Bash.\\n- Produce unified diffs or explicit file edits only.\\n- If a path does not exist, create the directory and file as part of the patch.\\n\\n## 변경 개요\\n\\n1. **테스트 보완**\\n   - 단위 테스트 및 e2e 테스트 강화\\n\\n2. **e2e 테스트 추가**\\n   - 경량 e2e 테스트 1~2개 추가\\n\\n3. **문서 업데이트**\\n   - README 파일 보강\\n\\n## 파일별 수정 계획\\n\\n1. **tests/unit/wincheck.test.ts**\\n   - 테스트 케이스 보완 및 추가\\n\\n2. **tests/e2e/omok.spec.ts**\\n   - 추가적인 e2e 테스트 시나리오 작성\\n\\n3. **README.md**\\n   - 프로젝트 개요, 설치 및 실행 방법, 게임 규칙 등 포함\\n\\n## 안전 체크리스트\\n\\n- [ ] 모든 테스트 케이스 성공 확인\\n- [ ] 코드 변경에 따른 타입 및 린트 오류 확인\\n- [ ] WebSocket 연결 및 여러 클라이언트 간 동기화 확인\\n- [ ] 문서에 명확하고 이해하기 쉬운 정보 포함\\n\\n## 최종 실행할 수정 단계\\n\\n1. **단위 테스트 보완**\\n   - `wincheck.test.ts`의 미흡한 테스트 보완\\n   - 커밋: `test: Enhance win-check unit tests`\\n\\n2. **e2e 테스트 추가**\\n   - 간단한 시나리오 기반 e2e 테스트 추가\\n   - 커밋: `test: Add lightweight e2e tests`\\n\\n3. **README 업데이트**\\n   - 프로젝트 설명 및 실행 방법 추가\\n   - 커밋: `docs: Update README with detailed instructions`\\n\\n4. **테스트 실행 및 확인**\\n   - 모든 테스트 케이스 실행\\n   - 결과 검토 및 추가 수정 필요 시 대응\\n\\n5. **최종 검토 후 PR 제출**\\n   - PR로 변경 사항 제출 및 머지 프로세스 진행\" --output-format text"
+    },
+    "ts": "2025-09-06T13:46:31.653Z"
+  },
+  {
+    "stage": "agent:fallback",
+    "ok": true,
+    "details": {
+      "chain": "cursor->claude"
+    },
+    "ts": "2025-09-06T13:53:30.209Z"
+  },
+  {
+    "stage": "hooks:afterAgent",
+    "ok": true,
+    "details": {
+      "step": 1,
+      "ok": true
+    },
+    "ts": "2025-09-06T13:53:45.552Z"
   }
 ]

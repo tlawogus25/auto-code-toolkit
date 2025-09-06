@@ -6,9 +6,10 @@ import {
   makeMove, 
   checkWin,
   getNextPlayer,
-  isBoardFull
+  isBoardFull,
+  getWinner
 } from '../logic/gameLogic.js';
-import { PlayerColor, BOARD_SIZE } from '../types/game.js';
+import { PlayerColor, BOARD_SIZE, GameStatus } from '../types/game.js';
 
 describe('Game Logic Tests', () => {
   describe('createEmptyBoard', () => {
@@ -326,6 +327,238 @@ describe('Game Logic Tests', () => {
       }
       
       expect(isBoardFull(board)).toBe(true);
+    });
+
+    it('should return false for board with single empty cell', () => {
+      const board = createEmptyBoard();
+      
+      // Fill entire board except one cell
+      for (let i = 0; i < BOARD_SIZE; i++) {
+        for (let j = 0; j < BOARD_SIZE; j++) {
+          if (i === 7 && j === 7) continue; // Leave center empty
+          board[i][j] = (i + j) % 2 === 0 ? PlayerColor.BLACK : PlayerColor.WHITE;
+        }
+      }
+      
+      expect(isBoardFull(board)).toBe(false);
+    });
+  });
+
+  describe('getWinner', () => {
+    it('should return null for empty game state', () => {
+      const gameState = {
+        board: createEmptyBoard(),
+        currentPlayer: PlayerColor.BLACK,
+        status: GameStatus.IN_PROGRESS,
+        winner: null,
+        moves: [],
+        roomId: 'test-room'
+      };
+      
+      expect(getWinner(gameState)).toBe(null);
+    });
+
+    it('should return winner when last move creates winning condition', () => {
+      const board = createEmptyBoard();
+      
+      // Set up a winning horizontal line
+      for (let i = 0; i < 5; i++) {
+        board[7][i] = PlayerColor.BLACK;
+      }
+      
+      const gameState = {
+        board,
+        currentPlayer: PlayerColor.WHITE,
+        status: GameStatus.FINISHED,
+        winner: PlayerColor.BLACK,
+        moves: [
+          { position: { row: 7, col: 0 }, player: PlayerColor.BLACK, timestamp: 1 },
+          { position: { row: 8, col: 0 }, player: PlayerColor.WHITE, timestamp: 2 },
+          { position: { row: 7, col: 1 }, player: PlayerColor.BLACK, timestamp: 3 },
+          { position: { row: 8, col: 1 }, player: PlayerColor.WHITE, timestamp: 4 },
+          { position: { row: 7, col: 2 }, player: PlayerColor.BLACK, timestamp: 5 },
+          { position: { row: 8, col: 2 }, player: PlayerColor.WHITE, timestamp: 6 },
+          { position: { row: 7, col: 3 }, player: PlayerColor.BLACK, timestamp: 7 },
+          { position: { row: 8, col: 3 }, player: PlayerColor.WHITE, timestamp: 8 },
+          { position: { row: 7, col: 4 }, player: PlayerColor.BLACK, timestamp: 9 }
+        ],
+        roomId: 'test-room'
+      };
+      
+      expect(getWinner(gameState)).toBe(PlayerColor.BLACK);
+    });
+
+    it('should return null when last move does not create winning condition', () => {
+      const board = createEmptyBoard();
+      board[7][0] = PlayerColor.BLACK;
+      board[7][1] = PlayerColor.BLACK;
+      board[7][2] = PlayerColor.BLACK;
+      board[7][3] = PlayerColor.BLACK;
+      // Only 4 in a row, not winning
+      
+      const gameState = {
+        board,
+        currentPlayer: PlayerColor.WHITE,
+        status: GameStatus.IN_PROGRESS,
+        winner: null,
+        moves: [
+          { position: { row: 7, col: 0 }, player: PlayerColor.BLACK, timestamp: 1 },
+          { position: { row: 8, col: 0 }, player: PlayerColor.WHITE, timestamp: 2 },
+          { position: { row: 7, col: 1 }, player: PlayerColor.BLACK, timestamp: 3 },
+          { position: { row: 8, col: 1 }, player: PlayerColor.WHITE, timestamp: 4 },
+          { position: { row: 7, col: 2 }, player: PlayerColor.BLACK, timestamp: 5 },
+          { position: { row: 8, col: 2 }, player: PlayerColor.WHITE, timestamp: 6 },
+          { position: { row: 7, col: 3 }, player: PlayerColor.BLACK, timestamp: 7 }
+        ],
+        roomId: 'test-room'
+      };
+      
+      expect(getWinner(gameState)).toBe(null);
+    });
+
+    it('should handle game state with board mismatch correctly', () => {
+      const board = createEmptyBoard();
+      // Board has different state than what moves suggest
+      board[7][7] = PlayerColor.WHITE;
+      
+      const gameState = {
+        board,
+        currentPlayer: PlayerColor.WHITE,
+        status: GameStatus.IN_PROGRESS,
+        winner: null,
+        moves: [
+          { position: { row: 7, col: 7 }, player: PlayerColor.BLACK, timestamp: 1 }
+        ],
+        roomId: 'test-room'
+      };
+      
+      expect(getWinner(gameState)).toBe(null);
+    });
+  });
+
+  describe('Complex win scenarios', () => {
+    it('should detect win in middle of longer sequence', () => {
+      const board = createEmptyBoard();
+      
+      // Place 7 stones horizontally
+      for (let i = 2; i < 9; i++) {
+        board[7][i] = PlayerColor.BLACK;
+      }
+      
+      // Check various positions in the sequence
+      expect(checkWin(board, { row: 7, col: 3 }, PlayerColor.BLACK)).toBe(true);
+      expect(checkWin(board, { row: 7, col: 5 }, PlayerColor.BLACK)).toBe(true);
+      expect(checkWin(board, { row: 7, col: 7 }, PlayerColor.BLACK)).toBe(true);
+    });
+
+    it('should detect multiple possible wins on same position', () => {
+      const board = createEmptyBoard();
+      
+      // Create intersection where both horizontal and vertical lines win
+      const centerPos = { row: 7, col: 7 };
+      
+      // Horizontal line
+      for (let i = 5; i < 10; i++) {
+        board[7][i] = PlayerColor.WHITE;
+      }
+      
+      // Vertical line  
+      for (let i = 5; i < 10; i++) {
+        board[i][7] = PlayerColor.WHITE;
+      }
+      
+      expect(checkWin(board, centerPos, PlayerColor.WHITE)).toBe(true);
+    });
+
+    it('should handle diagonal wins near board edges correctly', () => {
+      const board = createEmptyBoard();
+      
+      // Diagonal from top-right corner area
+      const positions = [
+        { row: 0, col: 10 },
+        { row: 1, col: 11 },
+        { row: 2, col: 12 },
+        { row: 3, col: 13 },
+        { row: 4, col: 14 }
+      ];
+      
+      positions.forEach(pos => {
+        board[pos.row][pos.col] = PlayerColor.BLACK;
+      });
+      
+      expect(checkWin(board, positions[2], PlayerColor.BLACK)).toBe(true);
+      expect(checkWin(board, positions[0], PlayerColor.BLACK)).toBe(true);
+      expect(checkWin(board, positions[4], PlayerColor.BLACK)).toBe(true);
+    });
+
+    it('should handle anti-diagonal wins near board edges correctly', () => {
+      const board = createEmptyBoard();
+      
+      // Anti-diagonal from bottom-right corner area
+      const positions = [
+        { row: 10, col: 14 },
+        { row: 11, col: 13 },
+        { row: 12, col: 12 },
+        { row: 13, col: 11 },
+        { row: 14, col: 10 }
+      ];
+      
+      positions.forEach(pos => {
+        board[pos.row][pos.col] = PlayerColor.WHITE;
+      });
+      
+      expect(checkWin(board, positions[2], PlayerColor.WHITE)).toBe(true);
+      expect(checkWin(board, positions[0], PlayerColor.WHITE)).toBe(true);
+      expect(checkWin(board, positions[4], PlayerColor.WHITE)).toBe(true);
+    });
+  });
+
+  describe('Performance and stress tests', () => {
+    it('should handle checking win on heavily filled board efficiently', () => {
+      const board = createEmptyBoard();
+      
+      // Fill most of the board with alternating patterns
+      for (let i = 0; i < BOARD_SIZE; i++) {
+        for (let j = 0; j < BOARD_SIZE - 5; j++) {
+          board[i][j] = (i + j) % 2 === 0 ? PlayerColor.BLACK : PlayerColor.WHITE;
+        }
+      }
+      
+      // Add a winning line at the end
+      for (let i = 0; i < 5; i++) {
+        board[7][BOARD_SIZE - 5 + i] = PlayerColor.BLACK;
+      }
+      
+      const startTime = performance.now();
+      const hasWin = checkWin(board, { row: 7, col: BOARD_SIZE - 3 }, PlayerColor.BLACK);
+      const endTime = performance.now();
+      
+      expect(hasWin).toBe(true);
+      expect(endTime - startTime).toBeLessThan(10); // Should complete within 10ms
+    });
+
+    it('should handle multiple consecutive win checks efficiently', () => {
+      const board = createEmptyBoard();
+      
+      // Set up multiple winning lines
+      for (let i = 0; i < 5; i++) {
+        board[3][i] = PlayerColor.BLACK; // Horizontal
+        board[i][3] = PlayerColor.WHITE; // Vertical
+        board[i + 5][i + 5] = PlayerColor.BLACK; // Diagonal
+      }
+      
+      const startTime = performance.now();
+      
+      // Check multiple positions rapidly
+      for (let testRun = 0; testRun < 100; testRun++) {
+        checkWin(board, { row: 3, col: 2 }, PlayerColor.BLACK);
+        checkWin(board, { row: 2, col: 3 }, PlayerColor.WHITE);
+        checkWin(board, { row: 7, col: 7 }, PlayerColor.BLACK);
+      }
+      
+      const endTime = performance.now();
+      
+      expect(endTime - startTime).toBeLessThan(50); // Should complete within 50ms
     });
   });
 });
