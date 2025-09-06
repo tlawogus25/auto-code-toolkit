@@ -561,4 +561,182 @@ describe('Game Logic Tests', () => {
       expect(endTime - startTime).toBeLessThan(50); // Should complete within 50ms
     });
   });
+
+  describe('Advanced game scenarios', () => {
+    it('should handle simultaneous potential wins correctly', () => {
+      const board = createEmptyBoard();
+      
+      // Create a scenario where both players could win
+      // Black has 4 in a row horizontally with gaps on both ends
+      board[7][2] = PlayerColor.BLACK;
+      board[7][3] = PlayerColor.BLACK;
+      board[7][4] = PlayerColor.BLACK;
+      board[7][5] = PlayerColor.BLACK;
+      
+      // White has 4 in a row vertically with gaps on both ends  
+      board[3][7] = PlayerColor.WHITE;
+      board[4][7] = PlayerColor.WHITE;
+      board[5][7] = PlayerColor.WHITE;
+      board[6][7] = PlayerColor.WHITE;
+      
+      // Neither should win yet
+      expect(checkWin(board, { row: 7, col: 3 }, PlayerColor.BLACK)).toBe(false);
+      expect(checkWin(board, { row: 5, col: 7 }, PlayerColor.WHITE)).toBe(false);
+      
+      // Black wins by filling the gap
+      board[7][1] = PlayerColor.BLACK;
+      expect(checkWin(board, { row: 7, col: 1 }, PlayerColor.BLACK)).toBe(true);
+    });
+
+    it('should handle complex overlapping patterns', () => {
+      const board = createEmptyBoard();
+      
+      // Create an X pattern with black stones
+      const center = { row: 7, col: 7 };
+      
+      // Main diagonal
+      for (let i = -2; i <= 2; i++) {
+        board[center.row + i][center.col + i] = PlayerColor.BLACK;
+      }
+      
+      // Anti-diagonal  
+      for (let i = -2; i <= 2; i++) {
+        board[center.row + i][center.col - i] = PlayerColor.BLACK;
+      }
+      
+      // The center position should trigger win for both diagonals
+      expect(checkWin(board, center, PlayerColor.BLACK)).toBe(true);
+      
+      // Any position in either diagonal should also trigger win
+      expect(checkWin(board, { row: 5, col: 5 }, PlayerColor.BLACK)).toBe(true);
+      expect(checkWin(board, { row: 5, col: 9 }, PlayerColor.BLACK)).toBe(true);
+    });
+
+    it('should correctly identify false wins with gaps', () => {
+      const board = createEmptyBoard();
+      
+      // Create 4 stones with a gap in the middle
+      board[7][0] = PlayerColor.BLACK;
+      board[7][1] = PlayerColor.BLACK;
+      // gap at [7][2]
+      board[7][3] = PlayerColor.BLACK;
+      board[7][4] = PlayerColor.BLACK;
+      
+      expect(checkWin(board, { row: 7, col: 0 }, PlayerColor.BLACK)).toBe(false);
+      expect(checkWin(board, { row: 7, col: 4 }, PlayerColor.BLACK)).toBe(false);
+    });
+
+    it('should handle wins at exact board boundaries', () => {
+      const board = createEmptyBoard();
+      
+      // Vertical win at left edge
+      for (let i = 0; i < 5; i++) {
+        board[i][0] = PlayerColor.WHITE;
+      }
+      expect(checkWin(board, { row: 0, col: 0 }, PlayerColor.WHITE)).toBe(true);
+      expect(checkWin(board, { row: 4, col: 0 }, PlayerColor.WHITE)).toBe(true);
+      
+      // Horizontal win at top edge
+      const board2 = createEmptyBoard();
+      for (let i = 0; i < 5; i++) {
+        board2[0][i] = PlayerColor.BLACK;
+      }
+      expect(checkWin(board2, { row: 0, col: 2 }, PlayerColor.BLACK)).toBe(true);
+    });
+
+    it('should validate board state consistency', () => {
+      const board = createEmptyBoard();
+      
+      // Test immutability of original board after makeMove
+      const originalBoard = createEmptyBoard();
+      const position = { row: 7, col: 7 };
+      
+      const newBoard = makeMove(originalBoard, position, PlayerColor.BLACK);
+      
+      // Original should be unchanged
+      expect(originalBoard[7][7]).toBe(null);
+      // New board should have the move
+      expect(newBoard[7][7]).toBe(PlayerColor.BLACK);
+      // Boards should be different references
+      expect(newBoard).not.toBe(originalBoard);
+    });
+
+    it('should handle rapid sequence of moves correctly', () => {
+      let board = createEmptyBoard();
+      const moves = [
+        { pos: { row: 7, col: 7 }, player: PlayerColor.BLACK },
+        { pos: { row: 7, col: 8 }, player: PlayerColor.WHITE },
+        { pos: { row: 6, col: 7 }, player: PlayerColor.BLACK },
+        { pos: { row: 6, col: 8 }, player: PlayerColor.WHITE },
+        { pos: { row: 8, col: 7 }, player: PlayerColor.BLACK },
+        { pos: { row: 8, col: 8 }, player: PlayerColor.WHITE },
+        { pos: { row: 5, col: 7 }, player: PlayerColor.BLACK },
+        { pos: { row: 5, col: 8 }, player: PlayerColor.WHITE },
+        { pos: { row: 9, col: 7 }, player: PlayerColor.BLACK }
+      ];
+      
+      for (const move of moves) {
+        board = makeMove(board, move.pos, move.player);
+      }
+      
+      // Black should have won with vertical line
+      expect(checkWin(board, { row: 9, col: 7 }, PlayerColor.BLACK)).toBe(true);
+      
+      // Verify all moves were applied
+      expect(board[7][7]).toBe(PlayerColor.BLACK);
+      expect(board[7][8]).toBe(PlayerColor.WHITE);
+      expect(board[9][7]).toBe(PlayerColor.BLACK);
+    });
+  });
+
+  describe('Error handling and robustness', () => {
+    it('should handle null/undefined inputs gracefully', () => {
+      const board = createEmptyBoard();
+      
+      // Test with invalid positions that might cause issues
+      expect(() => isValidPosition({ row: NaN, col: 5 })).not.toThrow();
+      expect(() => isValidPosition({ row: 5, col: Infinity })).not.toThrow();
+      expect(() => isValidPosition({ row: -Infinity, col: 5 })).not.toThrow();
+      
+      expect(isValidPosition({ row: NaN, col: 5 })).toBe(false);
+      expect(isValidPosition({ row: 5, col: Infinity })).toBe(false);
+      expect(isValidPosition({ row: -Infinity, col: 5 })).toBe(false);
+    });
+
+    it('should handle edge case positions consistently', () => {
+      const board = createEmptyBoard();
+      
+      // Test positions exactly at boundaries
+      expect(isValidPosition({ row: 0, col: 0 })).toBe(true);
+      expect(isValidPosition({ row: BOARD_SIZE - 1, col: BOARD_SIZE - 1 })).toBe(true);
+      expect(isValidPosition({ row: BOARD_SIZE, col: BOARD_SIZE })).toBe(false);
+      expect(isValidPosition({ row: -1, col: -1 })).toBe(false);
+    });
+
+    it('should maintain board integrity after multiple operations', () => {
+      const board = createEmptyBoard();
+      let currentBoard = board;
+      
+      // Perform multiple moves and verify board state
+      const testPositions = [
+        { row: 0, col: 0 }, { row: 0, col: 14 },
+        { row: 14, col: 0 }, { row: 14, col: 14 },
+        { row: 7, col: 7 }
+      ];
+      
+      for (let i = 0; i < testPositions.length; i++) {
+        const player = i % 2 === 0 ? PlayerColor.BLACK : PlayerColor.WHITE;
+        currentBoard = makeMove(currentBoard, testPositions[i], player);
+        
+        // Verify the move was applied
+        expect(currentBoard[testPositions[i].row][testPositions[i].col]).toBe(player);
+        
+        // Verify other positions remain unchanged or have expected values
+        for (let j = 0; j < i; j++) {
+          const prevPlayer = j % 2 === 0 ? PlayerColor.BLACK : PlayerColor.WHITE;
+          expect(currentBoard[testPositions[j].row][testPositions[j].col]).toBe(prevPlayer);
+        }
+      }
+    });
+  });
 });
