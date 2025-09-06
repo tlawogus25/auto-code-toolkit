@@ -44,7 +44,8 @@
     "allowed_globs": [
       "src/**",
       "app/**",
-      "docs/**"
+      "docs/**",
+      "^README\\.md$"
     ],
     "plan_only_threshold_chars": 8000,
     "hard_stop_chars_without_high_cost_label": 20000
