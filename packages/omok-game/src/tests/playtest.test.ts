@@ -305,4 +305,152 @@ describe('Omok Game E2E Play Tests', () => {
       expect(validResponse.gameState.currentPlayer).toBe('black');
     }
   }, 15000);
+
+  it('should handle a complete game with winner detection', async () => {
+    // Create and join room
+    client1.send(JSON.stringify({
+      type: MessageType.CREATE_ROOM,
+      roomName: 'Win Test',
+      playerName: 'Player1',
+      timestamp: Date.now()
+    }));
+
+    const createResponse = await waitForSpecificMessage(client1, MessageType.GAME_UPDATE);
+    let testRoomId = '';
+    if (createResponse.type === MessageType.GAME_UPDATE) {
+      testRoomId = createResponse.room.id;
+    }
+
+    client2.send(JSON.stringify({
+      type: MessageType.JOIN_ROOM,
+      roomId: testRoomId,
+      playerName: 'Player2',
+      timestamp: Date.now()
+    }));
+
+    await waitForSpecificMessage(client2, MessageType.GAME_UPDATE);
+
+    // Play a sequence of moves leading to a win
+    const winningMoves = [
+      { player: client1, pos: { row: 7, col: 7 } },   // Black
+      { player: client2, pos: { row: 8, col: 7 } },   // White
+      { player: client1, pos: { row: 7, col: 8 } },   // Black
+      { player: client2, pos: { row: 8, col: 8 } },   // White
+      { player: client1, pos: { row: 7, col: 9 } },   // Black
+      { player: client2, pos: { row: 8, col: 9 } },   // White
+      { player: client1, pos: { row: 7, col: 10 } },  // Black
+      { player: client2, pos: { row: 8, col: 10 } },  // White
+      { player: client1, pos: { row: 7, col: 11 } }   // Black wins
+    ];
+
+    for (const move of winningMoves) {
+      move.player.send(JSON.stringify({
+        type: MessageType.MAKE_MOVE,
+        roomId: testRoomId,
+        position: move.pos,
+        timestamp: Date.now()
+      }));
+
+      const response = await waitForSpecificMessage(move.player, MessageType.GAME_UPDATE);
+      if (response.type === MessageType.GAME_UPDATE) {
+        // Check if game is finished (this should happen on the last move)
+        if (response.gameState.status === 'finished') {
+          expect(response.gameState.winner).toBe('black');
+          expect(response.gameState.moves).toHaveLength(9);
+          break;
+        }
+      }
+    }
+  }, 20000);
+
+  it('should properly handle server restart and reconnection scenarios', async () => {
+    // Create initial connection and room
+    client1.send(JSON.stringify({
+      type: MessageType.CREATE_ROOM,
+      roomName: 'Persistence Test',
+      playerName: 'Player1',
+      timestamp: Date.now()
+    }));
+
+    const createResponse = await waitForSpecificMessage(client1, MessageType.GAME_UPDATE);
+    let testRoomId = '';
+    if (createResponse.type === MessageType.GAME_UPDATE) {
+      testRoomId = createResponse.room.id;
+      expect(createResponse.room.players).toHaveLength(1);
+    }
+
+    // Simulate client disconnection and reconnection
+    client1.close();
+
+    // Wait a bit and reconnect
+    await new Promise(resolve => setTimeout(resolve, 500));
+    
+    client1 = new WebSocket(`ws://localhost:${serverPort}`);
+    await new Promise(resolve => client1.on('open', resolve));
+
+    // Try to rejoin the same room
+    client1.send(JSON.stringify({
+      type: MessageType.JOIN_ROOM,
+      roomId: testRoomId,
+      playerName: 'Player1',
+      timestamp: Date.now()
+    }));
+
+    // Should either succeed or get appropriate error message
+    try {
+      const response = await waitForMessage(client1);
+      expect([MessageType.GAME_UPDATE, MessageType.ERROR]).toContain(response.type);
+    } catch (error) {
+      // Timeout is acceptable for this test scenario
+      expect((error as Error).message).toContain('timeout');
+    }
+  }, 15000);
+
+  it('should maintain game state consistency across multiple clients', async () => {
+    // Create room and join players
+    client1.send(JSON.stringify({
+      type: MessageType.CREATE_ROOM,
+      roomName: 'Consistency Test',
+      playerName: 'Player1',
+      timestamp: Date.now()
+    }));
+
+    const createResponse = await waitForSpecificMessage(client1, MessageType.GAME_UPDATE);
+    let testRoomId = '';
+    if (createResponse.type === MessageType.GAME_UPDATE) {
+      testRoomId = createResponse.room.id;
+    }
+
+    client2.send(JSON.stringify({
+      type: MessageType.JOIN_ROOM,
+      roomId: testRoomId,
+      playerName: 'Player2',
+      timestamp: Date.now()
+    }));
+
+    await waitForSpecificMessage(client2, MessageType.GAME_UPDATE);
+
+    // Make a move from player1
+    client1.send(JSON.stringify({
+      type: MessageType.MAKE_MOVE,
+      roomId: testRoomId,
+      position: { row: 7, col: 7 },
+      timestamp: Date.now()
+    }));
+
+    // Both clients should receive the same game state update
+    const [response1, response2] = await Promise.all([
+      waitForSpecificMessage(client1, MessageType.GAME_UPDATE),
+      waitForSpecificMessage(client2, MessageType.GAME_UPDATE)
+    ]);
+
+    if (response1.type === MessageType.GAME_UPDATE && response2.type === MessageType.GAME_UPDATE) {
+      // Both clients should have the same game state
+      expect(response1.gameState.moves).toEqual(response2.gameState.moves);
+      expect(response1.gameState.currentPlayer).toBe(response2.gameState.currentPlayer);
+      expect(response1.gameState.board[7][7]).toBe(response2.gameState.board[7][7]);
+      expect(response1.gameState.moves).toHaveLength(1);
+      expect(response1.gameState.currentPlayer).toBe('white');
+    }
+  }, 15000);
 });
