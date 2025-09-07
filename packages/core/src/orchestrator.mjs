@@ -73,7 +73,8 @@ export async function runOrchestrator({ repoRoot, configPath, eventPath }) {    
     loopSummary: { startedAt: nowIso(), steps: [] },                                  // 루프 요약(스텝별)
     usageTotals: { openai: { input:0, output:0 }, gemini: { input:0, output:0 } },    // 토큰 사용량
     diagnostics: { last: null },                                                      // 마지막 진단
-    prNumber: null, branch: null                                                      // 생성된 PR/브랜치
+    prNumber: null, branch: null,                                                     // 생성된 PR/브랜치
+    agentCalls: { claude: 0, cursor: 0 }                                              // ★ 에이전트 호출 카운터
   };
 
   // ★ 메타로그/스테이지 로그 파일 경로 정의(아티팩트 업로드 대상)
@@ -83,6 +84,7 @@ export async function runOrchestrator({ repoRoot, configPath, eventPath }) {    
   fs.mkdirSync(outDir, { recursive: true });
   const stageLogPath = path.join(outDir, "stage-log.json");
   const runMetaPath  = path.join(outDir, "run-meta.json");
+  const agentUsagePath = path.join(outDir, "agent-usage.json");                        // ★ 호출 카운터 산출물
 
   // ★ 스테이지 로그 헬퍼: {stage, ok, details, ts} 배열로 누적 기록
   function appendStage(stage, ok, details){
@@ -103,7 +105,8 @@ export async function runOrchestrator({ repoRoot, configPath, eventPath }) {    
       planOnly: ctx.planOnly,
       longMode: ctx.longMode,
       llm: ctx.llm, model: ctx.model, agent: ctx.agent,
-      branch: ctx.branch, prNumber: ctx.prNumber
+      branch: ctx.branch, prNumber: ctx.prNumber,
+      agentCalls: ctx.agentCalls                                                     // ★ 호출 카운터 포함
     };
     fs.writeFileSync(runMetaPath, JSON.stringify({ ...base, ...(extra||{}) }, null, 2), "utf8");
   }
@@ -262,20 +265,32 @@ export async function runOrchestrator({ repoRoot, configPath, eventPath }) {    
     const fallback = primary === "claude" ? "cursor" : "claude";
     try {
       const safePrompt = normalizeAgentPrompt(promptText);
+
+      // ★ 호출 카운터 증가(주 에이전트)
+      if (primary === "claude") ctx.agentCalls.claude++;
+      else if (primary === "cursor") ctx.agentCalls.cursor++;
+
       if (primary === "claude") await runWithClaude(safePrompt, tools, policy);
       else await runWithCursor(safePrompt, tools, policy);
-      appendStage("agent:primary", true, { used: primary });
+
+      appendStage("agent:primary", true, { used: primary, calls: ctx.agentCalls });
       return { ok: true, used: primary };
     } catch (e1) {
-      appendStage("agent:primary", false, { used: primary, error: String(e1?.message||e1) });
+      appendStage("agent:primary", false, { used: primary, error: String(e1?.message||e1), calls: ctx.agentCalls });
       try {
         const safePrompt2 = normalizeAgentPrompt(promptText);
+
+        // ★ 호출 카운터 증가(폴백 에이전트)
+        if (fallback === "claude") ctx.agentCalls.claude++;
+        else if (fallback === "cursor") ctx.agentCalls.cursor++;
+
         if (fallback === "claude") await runWithClaude(safePrompt2, tools, policy);
         else await runWithCursor(safePrompt2, tools, policy);
-        appendStage("agent:fallback", true, { chain: `${primary}->${fallback}` });
+
+        appendStage("agent:fallback", true, { chain: `${primary}->${fallback}`, calls: ctx.agentCalls });
         return { ok: true, used: `${primary}->${fallback}` };
       } catch (e2) {
-        appendStage("agent:fallback", false, { chain: `${primary}->${fallback}`, error: String(e2?.message||e2) });
+        appendStage("agent:fallback", false, { chain: `${primary}->${fallback}`, error: String(e2?.message||e2), calls: ctx.agentCalls });
         return { ok: false, used: `${primary}->${fallback}` };
       }
     }
@@ -292,11 +307,20 @@ export async function runOrchestrator({ repoRoot, configPath, eventPath }) {    
     try { execSync(`git push origin ${branch}`, { stdio: "inherit" }); } catch {}
     appendStage("git:push", true, { step });
     ctx.loopSummary.steps.push({ step, at: nowIso(), agentUsed: result.used, ok: result.ok });
+
+    // ★ 호출 카운터 산출물/메타 업데이트
+    writeFileSync(agentUsagePath, JSON.stringify({
+      when: nowIso(),
+      branch: ctx.branch,
+      steps: ctx.loopSummary.steps.length,
+      calls: ctx.agentCalls
+    }, null, 2), "utf8");
     writeRunMeta({ loopSummary: ctx.loopSummary });
+
     const diagFile = path.join(outDir, "diagnostics-last.json");
     writeFileSync(diagFile, JSON.stringify({
       when: nowIso(),
-      logs: [{ stage: "agent", ok: !!result.ok, out: result.used }]
+      logs: [{ stage: "agent", ok: !!result.ok, out: result.used, calls: ctx.agentCalls }]
     }, null, 2), "utf8");
   }
 
@@ -321,6 +345,7 @@ export async function runOrchestrator({ repoRoot, configPath, eventPath }) {    
   const labelList = labels.join(", ") || "(none)";
   const truncatedUserDemand = (ctx.userDemand || "").slice(0, 2000);
   const costLine = `OpenAI usage: in=${ctx.usageTotals.openai.input} out=${ctx.usageTotals.openai.output}`;
+  const callsLine = `Agent calls: claude=${ctx.agentCalls.claude} cursor=${ctx.agentCalls.cursor}`; // ★ 호출 요약
   const sourceIssueLine = sourceIssueNumber ? `Source-Issue: #${sourceIssueNumber}` : "Source-Issue: n/a";
 
   const infoMd = [
@@ -329,6 +354,7 @@ export async function runOrchestrator({ repoRoot, configPath, eventPath }) {    
     `- LLM (plan): **${ctx.llm}** (${ctx.model})`,
     `- Agent (requested): **${ctx.agent}**`,
     `- Agent (actual): **${agentUsed}**`, // ★ 실제 사용 체인 표기
+    `- ${callsLine}`,                       // ★ 호출수 표기
     `- Branch: ${ctx.branch}`,
     `- Labels: ${labelList}`,
     `- Tokens: ${tokenList}`,
