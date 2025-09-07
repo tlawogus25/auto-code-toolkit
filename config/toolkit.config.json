@@ -14,16 +14,29 @@
     "./packages/plugins/hybrid-merge"
   ],
   "tools": {
-    "openai": { "default": "gpt-4o-mini", "heavy": "gpt-4o", "max_output_tokens": 16000 },
-    "gemini": { "default": "gemini-2.5-flash", "heavy": "gemini-2.5-pro" },
+    "openai": {
+      "default": "gpt-4o-mini",
+      "heavy": "gpt-4o",
+      "max_output_tokens": 16000,
+      "preset": null
+    },
+    "gemini": {
+      "default": "gemini-2.5-flash",
+      "heavy": "gemini-2.5-pro",
+      "preset": null
+    },
     "claude": {
       "cli": "claude",
       "permission_mode": "acceptEdits",
       "allowed_tools": ["Read", "Bash"],
-      "default": "claude-3-haiku-latest",          
-      "heavy": "claude-3.5-sonnet-latest"          
+      "default": "claude-3-haiku-latest",
+      "heavy": "claude-3.5-sonnet-latest",
+      "preset": null
     },
-    "cursor": { "cli": "cursor-agent", "force": false }
+    "cursor": {
+      "cli": "cursor-agent",
+      "force": false
+    }
   },
   "policy": {
     "forbidden_globs": [

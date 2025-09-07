@@ -1,86 +1,112 @@
-// LLM/Agent 라우팅 규칙                                                             // 파일 설명
-// - 기본: OpenAI 1순위, 필요 시 Gemini로만 명시적 전환                               // 정책 요약
-// - 모델 선택: planOnly/빠른 응답 선호(preferFast)면 경량(default), 그 외 heavy 우선    // 모델 규칙
-// - 에이전트: cursor > claude > none                                                // 에이전트 우선순위
+// LLM/Agent 라우팅 규칙(독립 프리셋)                                                    // 파일 설명
+// - 공급자: OpenAI 기본, 필요 시 Gemini로 전환                                         // 공급자 정책
+// - 모델: OpenAI(LLM)와 Claude(Agent)를 **서로 다른 프리셋**으로 선택 가능             // 핵심 변경점
+// - 오버라이드: 프롬프트 use:*, ENV, config.preset 순으로 적용                         // 오버라이드 우선순위
 
-function normalize(str) {                                                            // 소문자 정규화 유틸
-  return (str || "").toLowerCase();                                                  // 입력이 없을 때 빈 문자열 처리
+function normalize(str) {                                                                // 소문자 정규화 유틸
+  return (str || "").toLowerCase();                                                      // 빈 값 방어
 }
 
-// 사용자의 명시적 오버라이드(프롬프트 안의 힌트 또는 ENV)                              // 제공자 오버라이드 진입
-function readProviderOverride(userDemand) {                                          // 오버라이드 판독 함수
-  const s = normalize(userDemand);                                                   // 프롬프트를 소문자화
-  const m = s.match(/\buse:(openai|gemini)\b/);                                      // use:openai|gemini 힌트 검색
-  if (m) return m[1];                                                                // 힌트가 있으면 해당 제공자 사용
-  const env = normalize(process.env.LLM_PROVIDER);                                   // ENV로 전역 제공자 고정
-  if (env === "openai" || env === "gemini") return env;                              // 유효값이면 반환
-  return null;                                                                       // 없으면 null
+// 프롬프트 내 공급자 오버라이드(use:openai|gemini) 파싱                                 // 공급자 힌트
+function readProviderOverride(userDemand) {                                              // 공급자 오버라이드
+  const s = normalize(userDemand);                                                       // 정규화
+  const m = s.match(/\buse:(openai|gemini)\b/);                                          // use:openai|gemini
+  if (m) return m[1];                                                                    // 매칭 시 반환
+  const env = normalize(process.env.LLM_PROVIDER);                                       // ENV 강제
+  if (env === "openai" || env === "gemini") return env;                                  // 유효 시 반환
+  return null;                                                                           // 없으면 null
 }
 
-// planOnly 또는 빠른 응답 선호 시 경량(default), 그 외 heavy 우선                         // 모델 선택 규칙
-function chooseModel(set = {}, { planOnly, preferFast }) {                           // 모델 선택 함수
-  const def = set?.default;                                                          // 경량 모델
-  const heavy = set?.heavy || def;                                                   // 무거운 모델(없으면 def 대체)
-  if (planOnly || preferFast) return def || heavy;                                   // 플랜/빠른 응답 → 경량 우선
-  return heavy || def;                                                               // 그 외 → heavy 우선
+// 프롬프트 내 **프리셋** 오버라이드 파싱                                                 // 프리셋 힌트
+// - LLM(OpenAI/Gemini) : use:openai:default|heavy / use:gemini:default|heavy            // 예시
+// - Agent(Claude)      : use:claude:default|heavy                                       // 예시
+function readPresetOverrides(userDemand) {                                               // 프리셋 오버라이드
+  const s = normalize(userDemand);                                                       // 정규화
+  const grab = (re) => { const m = s.match(re); return m ? m[1] : null; };              // 헬퍼
+  const llmPreset   = grab(/\buse:(?:openai|gemini):(default|heavy)\b/);                 // LLM 프리셋
+  const agentPreset = grab(/\buse:claude:(default|heavy)\b/);                            // Agent 프리셋
+  return { llmPreset, agentPreset };                                                     // 결과
 }
 
-// Agent 선택: cursor > claude > none                                                // 에이전트 결정 규칙
-function chooseAgent(tools = {}) {                                                   // 에이전트 선택 함수
-  if (tools.cursor?.cli) return "cursor";                                            // cursor CLI 있으면 우선
-  if (tools.claude?.cli) return "claude";                                            // 다음 순위 claude
-  return "none";                                                                     // 없으면 비활성
+// ENV/config에서 프리셋 오버라이드 수집                                                   // 외부 소스
+function readExternalPresets(tools = {}) {                                               // 외부 프리셋
+  const envLLM   = normalize(process.env.LLM_MODEL_PRESET);                              // ENV LLM
+  const envAgent = normalize(process.env.CLAUDE_MODEL_PRESET);                           // ENV Agent
+  const cfgLLM   = normalize(tools?.openai?.preset);                                     // config LLM
+  const cfgAgent = normalize(tools?.claude?.preset);                                     // config Agent
+  const canon = (v) => (v === "default" || v === "heavy") ? v : null;                    // 정규화 도우미
+  return { llmPreset: canon(envLLM) || canon(cfgLLM), agentPreset: canon(envAgent) || canon(cfgAgent) }; // 병합
 }
 
-// Claude Agent의 모델 선택(OPENAI와 동일 규칙 재사용)                                   // Claude 모델 선택
-function chooseAgentModel(tools = {}, flags = {}) {                                  // agentModel 선택 함수
-  const set = tools?.claude || {};                                                   // tools.claude 섹션
-  const modelSet = {                                                                 // 안전 폴백 포함
-    default: set.default || "claude-3-haiku-latest",                                 // 경량 기본값
-    heavy: set.heavy || set.default || "claude-3.5-sonnet-latest"                    // 무거운 기본값
-  };                                                                                 // 폴백 구성 끝
-  return chooseModel(modelSet, flags);                                               // 기존 규칙으로 선택
+// 지정된 모드(default|heavy)에 따라 모델 문자열을 선택                                     // 선택기(모드 기반)
+function chooseModelByMode(set = {}, mode = "heavy") {                                   // 모드 선택
+  const def = set?.default;                                                              // 경량
+  const heavy = set?.heavy || def;                                                       // 무거운
+  return (mode === "default") ? (def || heavy) : (heavy || def);                         // 모드별 반환
+}
+
+// Agent 선택: cursor > claude > none                                                     // 에이전트 우선순위
+function chooseAgent(tools = {}) {                                                       // 에이전트 선택
+  if (tools.cursor?.cli) return "cursor";                                                // cursor 우선
+  if (tools.claude?.cli) return "claude";                                                // 다음 claude
+  return "none";                                                                         // 없으면 none
 }
 
 /**
- * OpenAI 우선 라우팅                                                                  // JSDoc 개요
- * @param {Object} p                                                                  // 파라미터 객체
- * @param {string} p.userDemand  - 사용자 프롬프트(본문)                               // 입력 텍스트
- * @param {boolean} p.planOnly   - 계획만 생성 모드                                    // 플랜 전용
- * @param {Object} p.tools       - config.toolkit.config.json 의 tools 섹션            // 도구 설정
- * @param {boolean} p.preferFast - 빠른 응답 선호                                     // 빠른 모드
- * @returns {{ llm: "openai"|"gemini", model: string, agent: "cursor"|"claude"|"none", agentModel: (string|null) }} // 반환 스키마
+ * LLM/Agent 동시 라우팅(프리셋 독립)                                                     // JSDoc
+ * @param {Object} p                                                                      // 파라미터
+ * @param {string}  p.userDemand         - 사용자 프롬프트                                 // 입력 텍스트
+ * @param {boolean} p.planOnly           - 계획만 생성 여부                                // 플래그
+ * @param {Object}  p.tools              - config.tools                                    // 설정
+ * @param {boolean} p.preferFast         - (구) 전역 빠른 응답 선호                        // 레거시
+ * @param {boolean} p.preferFastLLM      - LLM 전용 빠른 응답 선호                         // 분리 플래그
+ * @param {boolean} p.preferFastAgent    - Agent 전용 빠른 응답 선호                       // 분리 플래그
+ * @returns {{llm:"openai"|"gemini", model:string, agent:"cursor"|"claude"|"none", agentModel:(string|null)}} // 반환
  */
-export function pickLLMAndAgent({ userDemand, planOnly, tools = {}, preferFast }) {   // 라우팅 메인 함수
-  const override = readProviderOverride(userDemand);                                  // 제공자 오버라이드 조회
+export function pickLLMAndAgent({
+  userDemand,                                                                           // 사용자 텍스트
+  planOnly,                                                                             // 플랜 전용
+  tools = {},                                                                           // 도구 설정
+  preferFast,                                                                           // 레거시 fast
+  preferFastLLM,                                                                        // LLM fast
+  preferFastAgent                                                                       // Agent fast
+}) {                                                                                    // 함수 시작
+  const providerOverride = readProviderOverride(userDemand);                             // 공급자 힌트
+  const inline = readPresetOverrides(userDemand);                                        // 프롬프트 프리셋
+  const external = readExternalPresets(tools);                                           // ENV/config 프리셋
 
-  // 1) 기본은 OpenAI, 오버라이드가 'gemini'일 때만 Gemini로 변경                         // 제공자 결정
-  let llm = "openai";                                                                 // 초기값 openai
-  if (override === "gemini") llm = "gemini";                                          // 힌트로 gemini 강제
-  else if (override === "openai") llm = "openai";                                     // 힌트가 openai면 유지
+  // 1) 공급자 결정(기본 openai, 힌트가 gemini면 전환)                                        // 공급자
+  let llm = "openai";                                                                    // 초기값
+  if (providerOverride === "gemini") llm = "gemini";                                     // gemini 강제
+  else if (providerOverride === "openai") llm = "openai";                                // openai 유지
 
-  // 2) 모델 고르기 (각 공급자에 설정된 default/heavy를 이용)                               // 모델 선택
-  const openaiModel = chooseModel(tools.openai || {}, { planOnly, preferFast }) || "gpt-4o-mini"; // OpenAI 모델
-  const geminiModel = chooseModel(tools.gemini || {}, { planOnly, preferFast }) || "gemini-2.5-flash"; // Gemini 모델
+  // 2) LLM 모델 모드 계산 (default|heavy)                                                  // LLM 모드
+  const modeLLM =
+    inline.llmPreset ||                                                                  // 프롬프트 우선
+    external.llmPreset ||                                                                // ENV/config 다음
+    ((planOnly || preferFastLLM || preferFast) ? "default" : "heavy");                   // 규칙 폴백
 
-  // 만약 OpenAI 설정이 전혀 없으면(키 미설정 등) 안전하게 Gemini로 폴백                    // 공급자 폴백
-  if (llm === "openai" && !tools.openai) {                                            // OpenAI 설정 없음
-    llm = "gemini";                                                                    // Gemini로 폴백
-  }
-  // 반대로 Gemini 설정이 없는데 override로 강제된 경우엔 OpenAI로 폴백                     // 역폴백
-  if (llm === "gemini" && !tools.gemini) {                                            // Gemini 설정 없음
-    llm = "openai";                                                                     // OpenAI로 폴백
-  }
+  // 3) Agent(Claude) 모델 모드 계산 (default|heavy)                                        // Agent 모드
+  const modeAgent =
+    inline.agentPreset ||                                                                // 프롬프트 우선
+    external.agentPreset ||                                                              // ENV/config 다음
+    ((preferFastAgent ?? preferFast) ? "default" : "heavy");                              // 규칙 폴백
 
-  const model = llm === "openai" ? openaiModel : geminiModel;                          // 최종 LLM 모델
+  // 4) 실제 모델 문자열 선택                                                                // 모델 선택
+  const openaiModel = chooseModelByMode(tools.openai || {}, modeLLM) || "gpt-4o-mini";   // OpenAI 모델
+  const geminiModel = chooseModelByMode(tools.gemini || {}, modeLLM) || "gemini-2.5-flash"; // Gemini 모델
+  const model = (llm === "openai") ? openaiModel : geminiModel;                          // LLM 모델
 
-  // 3) Agent 선택 + Claude agentModel 선택                                              // 에이전트/모델
-  const agent = chooseAgent(tools);                                                    // 에이전트 결정
-  const agentModel = agent === "claude"                                               // Claude일 때만
-    ? chooseAgentModel(tools, { planOnly, preferFast })                                // agentModel 선택
-    : null;                                                                            // 아니면 null
+  // 5) 에이전트/에이전트 모델 선택                                                          // 에이전트 선택
+  const agent = chooseAgent(tools);                                                      // cursor/claude/none
+  const agentModel = (agent === "claude")                                                // Claude일 때만
+    ? chooseModelByMode({                                                                // Claude 모델셋
+        default: tools?.claude?.default || "claude-3-haiku-latest",                     // 디폴트
+        heavy:   tools?.claude?.heavy   || tools?.claude?.default || "claude-3.5-sonnet-latest" // 헤비
+      }, modeAgent)                                                                      // 모드 적용
+    : null;                                                                              // 없으면 null
 
-  return { llm, model, agent, agentModel };                                            // 결과 반환
-}
+  return { llm, model, agent, agentModel };                                              // 결과 반환
+}                                                                                        // 함수 끝
 
-export { chooseModel };                                                                // 외부 재사용을 위해 export
+export { chooseModelByMode as chooseModel };                                             // 하위 호환 export
