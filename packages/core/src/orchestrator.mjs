@@ -118,26 +118,47 @@ export async function runOrchestrator({ repoRoot, configPath, eventPath }) {    
   });
   writeRunMeta();
 
-  // 안전 패치: 경로 검증(허용/금지 글롭)
+  // ===== 경로 검증/스테이징 헬퍼 (스테이지된 파일만 검증) =====
   function toRegexes(globs = []) {
     return globs.map(s => new RegExp(s.replace(/\*\*/g, ".*").replace(/\*/g, "[^/]*")));
   }
   function matchesAny(p, regs) { return regs.some(r => r.test(p)); }
-  function validateChangedPathsOrThrow(pol) {
-    const allowedRegs = toRegexes(pol.allowed_globs || ["^src/","^app/","^docs/","^apps/","^services/","^README\\.md$"]);
+
+  // 스테이징: 모두 추가 후 런타임 산출물은 언스테이지(커밋/검사 대상 제외)
+  function stageForCommit() {
+    try {
+      execSync(`git add -A`, { stdio: "inherit" });
+      execSync(`git restore --staged .github/auto || true`, { stdio: "inherit" });
+    } catch (e) {
+      console.log("stageForCommit: ignored error", e?.message || e);
+    }
+  }
+
+  // 스테이지된 파일 목록(커밋 후보)
+  function getStagedPaths() {
+    const out = execSync(`git diff --name-only --cached`, { encoding: "utf8" }).trim();
+    return out ? out.split("\n") : [];
+  }
+
+  // 스테이지된 파일만 정책 검증
+  function validateStagedPathsOrThrow(pol) {
+    const allowedRegs   = toRegexes(pol.allowed_globs   || ["^src/","^app/","^docs/","^apps/","^services/","^README\\.md$"]);
     const forbiddenRegs = toRegexes(pol.forbidden_globs || ["^\\.env","^secrets/","^\\.git/"]);
-    const out = execSync(`git ls-files -mo --exclude-standard`, { encoding: "utf8" }).trim();
-    const files = out ? out.split("\n") : [];
+    const files = getStagedPaths();
+
     const offenders = [];
     for (const f of files) {
       if (matchesAny(f, forbiddenRegs)) { offenders.push({ path: f, reason: "forbidden" }); continue; }
       if (!matchesAny(f, allowedRegs))  { offenders.push({ path: f, reason: "outside_allowed" }); }
     }
+
     if (offenders.length) {
-      appendStage("guard:path-offenders", false, { offenders });
+      appendStage("guard:path-offenders", false, { offenders, scope: "staged-only" });
       throw new Error("Changes include paths outside policy. See stage-log offenders.");
     }
+    appendStage("guard:path-ok", true, { filesCount: files.length, files });
   }
+  // ==========================================================
 
   // /auto 토큰/훅
   const { tokens, hooks: rawHooks } = await loadPlugins(pluginsPaths, repoRoot);
@@ -355,9 +376,12 @@ export async function runOrchestrator({ repoRoot, configPath, eventPath }) {    
       ctx.agentUsed = result.used || ctx.agent;
       appendStage("hooks:afterAgent", true, { step, ok: result.ok });
 
-      // 커밋 전 검증은 저장소 루트 기준으로 수행
+      // 커밋 전: 저장소 루트로 복귀 → 스테이징/검증/커밋/푸시
       process.chdir(repoRoot);
-      validateChangedPathsOrThrow(policy);
+
+      // 커밋 대상만 검사하도록 스테이징 → 검증
+      stageForCommit();
+      validateStagedPathsOrThrow(policy);
 
       checkpointCommit(`auto: checkpoint step ${step}`);
       try { execSync(`git push origin ${branch}`, { stdio: "inherit" }); } catch {}
@@ -463,4 +487,5 @@ export async function runOrchestrator({ repoRoot, configPath, eventPath }) {    
   appendStage("done", true, { longMode: ctx.longMode });
 
   return { success: true, branch: ctx.branch, long: ctx.longMode, usage: ctx.usageTotals, prNumber: ctx.prNumber };
-        }
+}
+
