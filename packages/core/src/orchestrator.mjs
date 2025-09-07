@@ -115,6 +115,28 @@ export async function runOrchestrator({ repoRoot, configPath, eventPath }) {    
   });
   writeRunMeta();
 
+  // ★★★ 안전 패치: 경로 검증 헬퍼 추가 (허용/금지 글롭 기반)
+  function toRegexes(globs = []) {
+    return globs.map(s => new RegExp(s.replace(/\*\*/g, ".*").replace(/\*/g, "[^/]*")));
+  }
+  function matchesAny(p, regs) { return regs.some(r => r.test(p)); }
+  function validateChangedPathsOrThrow(pol) {
+    const allowedRegs = toRegexes(pol.allowed_globs || ["^src/","^app/","^docs/","^apps/","^services/","^README\\.md$"]);
+    const forbiddenRegs = toRegexes(pol.forbidden_globs || ["^\\.env","^secrets/","^\\.git/"]);
+    const out = execSync(`git ls-files -mo --exclude-standard`, { encoding: "utf8" }).trim();
+    const files = out ? out.split("\n") : [];
+    const offenders = [];
+    for (const f of files) {
+      if (matchesAny(f, forbiddenRegs)) { offenders.push({ path: f, reason: "forbidden" }); continue; }
+      if (!matchesAny(f, allowedRegs))  { offenders.push({ path: f, reason: "outside_allowed" }); }
+    }
+    if (offenders.length) {
+      appendStage("guard:path-offenders", false, { offenders });
+      throw new Error("Changes include paths outside policy. See stage-log offenders.");
+    }
+  }
+  // ★★★ 끝
+
   // /auto 토큰 핸들러 실행
   for (const t of seq) {
     const h = tokens.get(t.toLowerCase());
@@ -298,6 +320,10 @@ export async function runOrchestrator({ repoRoot, configPath, eventPath }) {    
     ctx.agentUsed = result.used || ctx.agent; // ★ 실제 사용 체인 기록
     for (const h of (hooks.afterAgent || [])) await h(ctx);
     appendStage("hooks:afterAgent", true, { step, ok: result.ok });
+
+    // ★★★ 안전 패치: 커밋 직전 경로 검증(허용/금지 글롭 위반 시 즉시 실패)
+    validateChangedPathsOrThrow(policy);
+
     checkpointCommit(`auto: checkpoint step ${step}`);
     try { execSync(`git push origin ${branch}`, { stdio: "inherit" }); } catch {}
     appendStage("git:push", true, { step });
