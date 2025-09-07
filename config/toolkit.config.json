@@ -13,40 +13,31 @@
     "./packages/plugins/hybrid-merge"
   ],
   "tools": {
-    "openai": {
-      "default": "gpt-4o-mini",
-      "heavy": "gpt-4o",
-      "max_output_tokens": 16000
-    },
-    "gemini": {
-      "default": "gemini-2.5-flash",
-      "heavy": "gemini-2.5-pro"
-    },
+    "openai": { "default": "gpt-4o-mini", "heavy": "gpt-4o", "max_output_tokens": 16000 },
+    "gemini": { "default": "gemini-2.5-flash", "heavy": "gemini-2.5-pro" },
     "claude": {
       "cli": "claude",
       "permission_mode": "acceptEdits",
-      "allowed_tools": [
-        "Read",
-        "Bash"
-      ]
+      "allowed_tools": ["Read", "Bash"]
     },
-    "cursor": {
-      "cli": "cursor-agent",
-      "force": false
-    }
+    "cursor": { "cli": "cursor-agent", "force": false }
   },
   "policy": {
     "forbidden_globs": [
-      ".env*",
-      "secrets/**",
-      ".git/**"
+      "^\\.env",
+      "^secrets/",
+      "^\\.git/",
+      "^packages/core/",
+      "^packages/plugins/",
+      "^\\.github/auto/"
     ],
     "allowed_globs": [
-      "src/**",
-      "app/**",
-      "docs/**",
+      "^app/",
+      "^src/",
+      "^docs/",
       "^README\\.md$",
-      ".github/auto/**"
+      "^apps/",
+      "^services/"
     ],
     "plan_only_threshold_chars": 8000,
     "hard_stop_chars_without_high_cost_label": 20000
@@ -59,11 +50,7 @@
     }
   },
   "providers": {
-    "anthropic": {
-      "plan": "free"
-    },
-    "cursor": {
-      "plan": "free"
-    }
+    "anthropic": { "plan": "free" },
+    "cursor": { "plan": "free" }
   }
 }
