@@ -13,11 +13,11 @@ on:                                                                    # 트리�
 permissions:                                                           # 권한
   contents: write                                                      # 콘텐츠 쓰기
   pull-requests: write                                                 # PR 쓰기
-  issues: write                                                            # 이슈 읽기
+  issues: write                                                        # 이슈 읽기
 
 concurrency:                                                           # 동시성
   group: auto-code-${{ github.event.issue.number || github.event.pull_request.number || github.run_id }}
-  cancel-in-progress: true                                       # 중복 취소
+  cancel-in-progress: true                                             # 중복 취소
 
 jobs:                                                                  # 잡
   run:                                                                 # 잡 이름
@@ -96,13 +96,14 @@ jobs:                                                                  # 잡
       - name: Upload stage/run meta logs                                 # ★ 스테이지/메타 아티팩트 보장
         if: always()                                                     # 항상 실행
         uses: actions/upload-artifact@v4                                 # 업로드 액션
-        with:                                                            # 입력
-          name: auto-logs                                                # 아티팩트명
-          path: |                                                        # 경로들
-            .github/auto/diagnostics-last.json                           
-            .github/auto/stage-log.json                                 
-            .github/auto/run-meta.json                                   
-          if-no-files-found: ignore                                       # 없으면 무시
+        with:
+          name: auto-logs
+          path: |
+            .github/auto/diagnostics-last.json
+            .github/auto/stage-log.json
+            .github/auto/run-meta.json
+            .github/auto/agent-usage.json           # ← 추가
+          if-no-files-found: ignore
       
       - name: Cleanup label (prevent re-trigger)
         if: always() && (github.event_name == 'issues' || github.event_name == 'issue_comment')
