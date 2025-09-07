@@ -30,7 +30,7 @@ export async function runOrchestrator({ repoRoot, configPath, eventPath }) {    
 
   const eventName = process.env.GITHUB_EVENT_NAME || "";                               // 이벤트명
   const isIssue = !!evt.issue && !evt.comment;                                         // 이슈 이벤트 여부
-  const isDispatch = eventName === "workflow_dispatch";                                 // 디스패치 여부
+  const isDispatch = eventName === "workflow_dispatch";                                // 디스패치 여부
 
   // 본문(/auto 포함) 안전 추출: 이벤트별로 경로가 다름 + 디스패치 입력/ENV 폴백
   const dispatchBody = (evt?.inputs?.body ?? process.env.AUTO_INPUT_BODY ?? "");
@@ -52,32 +52,7 @@ export async function runOrchestrator({ repoRoot, configPath, eventPath }) {    
     if (!labels.includes(labelsCfg.run || "automation:run")) return { skipped: true };
   }
 
-  const { tokens, hooks: rawHooks } = await loadPlugins(pluginsPaths, repoRoot);       // 토큰/훅 로드
-  const hooks = {
-    beforeLLM: [], afterLLM: [], beforeAgent: [], afterAgent: [], beforePR: [], afterPR: [],
-    ...(rawHooks || {}),
-  };
-
-  const after = rawBody.replace(/^\/auto\s*/i, "");                                    // /auto 접두 제거
-  const m = after.match(/^((?:[\w:-]+)\b\s*)+/i) || [""];                              // 토큰 시퀀스 추출
-  const seq = (m[0] || "").trim().split(/\s+/).filter(Boolean);                       // 토큰 배열
-  const rest = after.slice((m[0]||"").length).trim();                                  // 사용자 요구 본문
-
-  const ctx = {                                                                        // 실행 컨텍스트
-    repoRoot, cfg, tools, policy, labels, pipeline,                                   // 설정/라벨/훅
-    tokens: seq, tokenFlags: {},                                                      // /auto 토큰 상태
-    userDemand: rest,                                                                 // 사용자 요구
-    llm: null, model: null, agent: null,                                              // 선택된 LLM/모델/에이전트
-    agentPrompt: "",                                                                  // 에이전트 프롬프트
-    planOnly: false, preferFast: false,                                               // 플랜 전용/속도 선호
-    longMode: false, budgetMinutes: null, budgetSteps: null,                          // 장시간 모드 파라미터
-    loopSummary: { startedAt: nowIso(), steps: [] },                                  // 루프 요약(스텝별)
-    usageTotals: { openai: { input:0, output:0 }, gemini: { input:0, output:0 } },    // 토큰 사용량
-    diagnostics: { last: null },                                                      // 마지막 진단
-    prNumber: null, branch: null                                                      // 생성된 PR/브랜치
-  };
-
-  // ★ 메타로그/스테이지 로그 파일 경로 정의(아티팩트 업로드 대상)
+  // 산출물/메타 파일 경로
   const outDir = process.env.AUTO_OUT_DIR
     ? path.resolve(process.env.AUTO_OUT_DIR)
     : path.join(repoRoot, ".github", "auto");
@@ -85,59 +60,65 @@ export async function runOrchestrator({ repoRoot, configPath, eventPath }) {    
   const stageLogPath = path.join(outDir, "stage-log.json");
   const runMetaPath  = path.join(outDir, "run-meta.json");
 
-  // ★ Service Root 고정 & 스캐폴딩 (apps/auto-<run> 또는 ENV 지정)
+  // 서비스 루트(sandbox) 고정: apps/auto-<runId> (또는 ENV로 재지정)
   const RUN_ID = Date.now();
   const SERVICE_ROOT = process.env.AUTO_SERVICE_ROOT
     ? path.resolve(repoRoot, process.env.AUTO_SERVICE_ROOT)
     : path.join(repoRoot, "apps", `auto-${RUN_ID}`);
   const REL_SERVICE_ROOT = path.relative(repoRoot, SERVICE_ROOT) || ".";
-  fs.mkdirSync(path.join(SERVICE_ROOT, "app"), { recursive: true });
-  fs.mkdirSync(path.join(SERVICE_ROOT, "src"), { recursive: true });
+  fs.mkdirSync(path.join(SERVICE_ROOT, "app"),   { recursive: true });
+  fs.mkdirSync(path.join(SERVICE_ROOT, "src"),   { recursive: true });
   fs.mkdirSync(path.join(SERVICE_ROOT, "tests"), { recursive: true });
-  fs.mkdirSync(path.join(SERVICE_ROOT, "docs"), { recursive: true });
-  // 초기 README(없으면)로 안내 추가
+  fs.mkdirSync(path.join(SERVICE_ROOT, "docs"),  { recursive: true });
   const readmePath = path.join(SERVICE_ROOT, "README.md");
   if (!existsSync(readmePath)) {
     fs.writeFileSync(
       readmePath,
-      `# Auto Service Root\n\n- This directory is the sandbox for generated code.\n- Place app/src/docs/tests under here.\n`,
+      `# Auto Service Root
+
+- This directory is the sandbox for generated code.
+- Create app/src/docs/tests under here.
+
+`,
       "utf8"
     );
   }
 
-  // ★ 스테이지 로그 헬퍼: {stage, ok, details, ts} 배열로 누적 기록
+  // 스테이지 로그/메타 기록 도우미
   function appendStage(stage, ok, details){
     let arr = [];
     try { arr = JSON.parse(fs.readFileSync(stageLogPath, "utf8")); } catch {}
     arr.push({ stage, ok: !!ok, details: details ?? null, ts: nowIso() });
     fs.writeFileSync(stageLogPath, JSON.stringify(arr, null, 2), "utf8");
   }
-  appendStage("scaffold:service-root", true, { serviceRoot: REL_SERVICE_ROOT });
-
-  // ★ 런 메타 기록: 트리거/출발점/소스 이슈/선택 LLM/모드 등 요약
   function writeRunMeta(extra){
     const base = {
-      startedAt: ctx.loopSummary.startedAt,
+      startedAt: nowIso(),
       event: evt.action || eventName || "n/a",
       source: isIssue ? "issue" : (isDispatch ? "dispatch" : "comment"),
-      sourceIssueNumber: sourceIssueNumber,
-      tokens: ctx.tokens,
-      planOnly: ctx.planOnly,
-      longMode: ctx.longMode,
-      llm: ctx.llm, model: ctx.model, agent: ctx.agent,
-      branch: ctx.branch, prNumber: ctx.prNumber,
-      serviceRoot: REL_SERVICE_ROOT,
+      sourceIssueNumber,
+      tokens: [], // 토큰은 아래에서 결정
+      planOnly: false,
+      longMode: false,
+      llm: null, model: null, agent: null,
+      branch: null, prNumber: null,
+      serviceRoot: REL_SERVICE_ROOT
     };
-    fs.writeFileSync(runMetaPath, JSON.stringify({ ...base, ...(extra||{}) }, null, 2), "utf8");
+    try {
+      const prev = JSON.parse(fs.readFileSync(runMetaPath, "utf8"));
+      fs.writeFileSync(runMetaPath, JSON.stringify({ ...prev, ...base, ...(extra||{}) }, null, 2), "utf8");
+    } catch {
+      fs.writeFileSync(runMetaPath, JSON.stringify({ ...base, ...(extra||{}) }, null, 2), "utf8");
+    }
   }
-
+  appendStage("scaffold:service-root", true, { serviceRoot: REL_SERVICE_ROOT });
   appendStage("bootstrap", true, {
     hasAuto: true,
     hasRunLabel: isDispatch ? "n/a(dispatch)" : labels.includes(labelsCfg.run || "automation:run")
   });
   writeRunMeta();
 
-  // ★★★ 안전 패치: 경로 검증 헬퍼 추가 (허용/금지 글롭 기반)
+  // 안전 패치: 경로 검증(허용/금지 글롭)
   function toRegexes(globs = []) {
     return globs.map(s => new RegExp(s.replace(/\*\*/g, ".*").replace(/\*/g, "[^/]*")));
   }
@@ -157,7 +138,33 @@ export async function runOrchestrator({ repoRoot, configPath, eventPath }) {    
       throw new Error("Changes include paths outside policy. See stage-log offenders.");
     }
   }
-  // ★★★ 끝
+
+  // /auto 토큰/훅
+  const { tokens, hooks: rawHooks } = await loadPlugins(pluginsPaths, repoRoot);
+  const hooks = {
+    beforeLLM: [], afterLLM: [], beforeAgent: [], afterAgent: [], beforePR: [], afterPR: [],
+    ...(rawHooks || {}),
+  };
+
+  const after = rawBody.replace(/^\/auto\s*/i, "");
+  const m = after.match(/^((?:[\w:-]+)\b\s*)+/i) || [""];
+  const seq = (m[0] || "").trim().split(/\s+/).filter(Boolean);
+  const rest = after.slice((m[0]||"").length).trim();
+
+  const ctx = {
+    repoRoot, cfg, tools, policy, labels, pipeline,
+    tokens: seq, tokenFlags: {},
+    userDemand: rest,
+    llm: null, model: null, agent: null,
+    agentPrompt: "",
+    planOnly: false, preferFast: false,
+    longMode: false, budgetMinutes: null, budgetSteps: null,
+    loopSummary: { startedAt: nowIso(), steps: [] },
+    usageTotals: { openai: { input:0, output:0 }, gemini: { input:0, output:0 } },
+    diagnostics: { last: null },
+    prNumber: null, branch: null
+  };
+  writeRunMeta({ tokens: ctx.tokens });
 
   // /auto 토큰 핸들러 실행
   for (const t of seq) {
@@ -186,6 +193,7 @@ export async function runOrchestrator({ repoRoot, configPath, eventPath }) {    
   });
   ctx.llm = route.llm; ctx.model = route.model; ctx.agent = route.agent;
   appendStage("route:selected", true, { llm: ctx.llm, model: ctx.model, agent: ctx.agent });
+  writeRunMeta({ llm: ctx.llm, model: ctx.model, agent: ctx.agent, planOnly: ctx.planOnly });
 
   for (const h of (hooks.beforeLLM || [])) await h(ctx);
   appendStage("hooks:beforeLLM", true, null);
@@ -194,11 +202,10 @@ export async function runOrchestrator({ repoRoot, configPath, eventPath }) {    
     "[에이전트 가드레일]",
     `- 허용 경로: ${(policy.allowed_globs||["src/**","app/**","docs/**","apps/**","services/**","README.md"]).join(", ")}`,
     `- 금지 경로: ${(policy.forbidden_globs||[".env*","secrets/**",".git/**"]).join(", ")}`,
-    `- 서비스 루트(모든 신규 파일/디렉터리 생성 위치): ${REL_SERVICE_ROOT}/`,
-    "- 'app/', 'src/', 'docs/', 'tests/' 같은 루트 상대 경로가 요구되면 반드시 위 서비스 루트 하위에 생성 (예: 'src/x' → '<서비스루트>/src/x')",
+    `- 서비스 루트(신규 생성 루트): ${REL_SERVICE_ROOT}/`,
+    "- 'app/', 'src/', 'docs/', 'tests/' 경로는 반드시 서비스 루트 하위에 생성 (예: 'src/x' → '<서비스루트>/src/x')",
     "- 'packages/**' 경로는 편집/생성 금지(툴킷 오염 방지)",
     "- .env* / 비밀키 / .git 은 읽기·쓰기도 금지",
-    "- 테스트가 있으면 실행 전략 제안",
     "- 변경은 설명 가능한 작은 커밋 단위 권장",
     "- 절대 쉘/Bash 명령을 실행하지 말 것(파일 편집/패치만 수행)",
     "- 존재하지 않는 디렉터리는 패치 내에서 생성 후 파일을 추가"
@@ -285,15 +292,12 @@ export async function runOrchestrator({ repoRoot, configPath, eventPath }) {    
   if (ctx.tokenFlags?.dryRun) { writeRunMeta({ dryRun: true }); return { dryRun: true, ctx }; }
   if (ctx.agent === "none" || ctx.planOnly) { writeRunMeta({ planOnly: ctx.planOnly }); return { planOnly: true, ctx }; }
 
-  // orchestrator.mjs                                                                    // 파일 동일
-  // Part 2/2: 에이전트 실행·체크포인트·PR 생성·메타/스테이지 기록                       // 파트 개요
+  // Part 2/2: 에이전트 실행·체크포인트·PR 생성·메타/스테이지 기록
 
   function checkpointCommit(msg){
     try {
-      // 모든 변경 스테이징
       execSync(`git add -A`, { stdio: "inherit" });
-      // ★ 안전 패치: 런타임 아티팩트(.github/auto)는 스테이징에서 제거하여 PR 포함 방지
-      // (존재하지 않아도 no-op; Git 2.23+ 지원)
+      // 런타임 아티팩트 제외
       execSync(`git restore --staged .github/auto || true`, { stdio: "inherit" });
     } catch {}
     try {
@@ -309,26 +313,26 @@ export async function runOrchestrator({ repoRoot, configPath, eventPath }) {    
   ctx.branch = branch;
   execSync(`git checkout -b ${branch}`, { stdio: "inherit" });
   appendStage("git:branch", true, { branch });
-  writeRunMeta();
+  writeRunMeta({ branch });
 
   const cancelPath = path.join(outDir, "CANCEL");
   const start = Date.now();
 
-  async function runAgentWithFallback(promptText, tools, policy) {
+  async function runAgentWithFallback(promptText, toolsArg, policyArg) {
     const primary = (ctx.agent || "").toLowerCase();
     const fallback = primary === "claude" ? "cursor" : "claude";
     try {
       const safePrompt = normalizeAgentPrompt(promptText);
-      if (primary === "claude") await runWithClaude(safePrompt, tools, policy);
-      else await runWithCursor(safePrompt, tools, policy);
+      if (primary === "claude") await runWithClaude(safePrompt, toolsArg, policyArg);
+      else await runWithCursor(safePrompt, toolsArg, policyArg);
       appendStage("agent:primary", true, { used: primary });
       return { ok: true, used: primary };
     } catch (e1) {
       appendStage("agent:primary", false, { used: primary, error: String(e1?.message||e1) });
       try {
         const safePrompt2 = normalizeAgentPrompt(promptText);
-        if (fallback === "claude") await runWithClaude(safePrompt2, tools, policy);
-        else await runWithCursor(safePrompt2, tools, policy);
+        if (fallback === "claude") await runWithClaude(safePrompt2, toolsArg, policyArg);
+        else await runWithCursor(safePrompt2, toolsArg, policyArg);
         appendStage("agent:fallback", true, { chain: `${primary}->${fallback}` });
         return { ok: true, used: `${primary}->${fallback}` };
       } catch (e2) {
@@ -342,17 +346,17 @@ export async function runOrchestrator({ repoRoot, configPath, eventPath }) {    
     for (const h of (hooks.beforeAgent || [])) await h(ctx);
     appendStage("hooks:beforeAgent", true, { step });
 
-    // ★★★ 핵심: 에이전트 실행을 서비스 루트(CWD)에서 수행 → 상대 경로 생성이 apps/... 하위로 고정
+    // 에이전트는 서비스 루트(CWD)에서 실행 → 상대경로 생성이 apps/... 하위로 고정
     const originalCwd = process.cwd();
     try {
       process.chdir(SERVICE_ROOT);
       appendStage("cwd:enter-service-root", true, { cwd: REL_SERVICE_ROOT });
       const result = await runAgentWithFallback(ctx.agentPrompt, tools, policy);
-      ctx.agentUsed = result.used || ctx.agent; // 실제 사용 체인 기록
+      ctx.agentUsed = result.used || ctx.agent;
       appendStage("hooks:afterAgent", true, { step, ok: result.ok });
 
-      // ★★★ 안전 패치: 커밋 직전 경로 검증(허용/금지 글롭 위반 시 즉시 실패)
-      process.chdir(repoRoot); // 검증/커밋은 저장소 루트 기준으로 실행
+      // 커밋 전 검증은 저장소 루트 기준으로 수행
+      process.chdir(repoRoot);
       validateChangedPathsOrThrow(policy);
 
       checkpointCommit(`auto: checkpoint step ${step}`);
@@ -385,7 +389,7 @@ export async function runOrchestrator({ repoRoot, configPath, eventPath }) {    
   for (const h of (hooks.beforePR || [])) await h(ctx);
   appendStage("hooks:beforePR", true, null);
 
-  // 결과 요약에 실제 사용된 에이전트 체인(result.used)을 합류
+  // 결과 요약
   const agentUsed = (ctx.agentUsed && String(ctx.agentUsed).trim()) || ctx.agent;
   const tokenList = (ctx.tokens||[]).join(", ") || "(none)";
   const labelList = labels.join(", ") || "(none)";
@@ -420,7 +424,6 @@ export async function runOrchestrator({ repoRoot, configPath, eventPath }) {    
   writeFileSync(prBodyPath, infoMd, "utf8");
   writeFileSync(promptBodyPath, promptMd, "utf8");
 
-  // ★ 제목에도 실제 사용 체인 반영
   const title = `auto: ${ctx.branch} [${ctx.llm}/${agentUsed}] (tokens: ${tokenList})`;
   execSync(
     `gh pr create --title ${JSON.stringify(title)} --body-file ${JSON.stringify(prBodyPath)} --base main --head ${ctx.branch}`,
@@ -432,7 +435,7 @@ export async function runOrchestrator({ repoRoot, configPath, eventPath }) {    
     `gh pr list -s all --head ${ctx.branch} --json number --jq '.[0].number // empty'`
   ).toString().trim();
   ctx.prNumber = prNumber || null;
-  writeRunMeta();
+  writeRunMeta({ prNumber: ctx.prNumber });
   appendStage("pr:number", !!ctx.prNumber, { prNumber: ctx.prNumber });
 
   if (prNumber) {
@@ -442,7 +445,7 @@ export async function runOrchestrator({ repoRoot, configPath, eventPath }) {    
     );
     appendStage("pr:comment-prompt", true, { prNumber });
 
-    // ★ 안전망: 자동 라벨 부여(플러그인 실패 대비, 중복 부착 안전)
+    // 안전망: 자동 라벨 부여(플러그인 실패 대비)
     const autoMerge = labelsCfg.autoMerge || "automation:auto-merge";
     const cont = labelsCfg.continue || "automation:continue";
     try {
@@ -460,6 +463,4 @@ export async function runOrchestrator({ repoRoot, configPath, eventPath }) {    
   appendStage("done", true, { longMode: ctx.longMode });
 
   return { success: true, branch: ctx.branch, long: ctx.longMode, usage: ctx.usageTotals, prNumber: ctx.prNumber };
-}
-```0
-
+        }
