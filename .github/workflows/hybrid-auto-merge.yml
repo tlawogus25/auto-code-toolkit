@@ -2,7 +2,7 @@ name: hybrid-auto-merge
 
 on:
   pull_request:
-    types: [labeled, synchronize, ready_for_review]
+    types: [opened, reopened, labeled, synchronize, ready_for_review]  # ← opened/reopened 추가
 
 permissions:
   contents: write
@@ -50,7 +50,7 @@ jobs:
             );
 
             const cfg = JSON.parse(process.env.CFG || "{}");
-            // 기본 허용 경로에 .github/auto/ 와 README.md를 포함
+            // 기본 허용 경로에 .github/auto/ 와 README.md를 포함 (cfg가 없을 때만)
             const allowed = (cfg.policy && cfg.policy.allowed_globs) ||
               ["^src/", "^app/", "^docs/", "^\\.github/auto/", "^README\\.md$"];
             const forbidden = (cfg.policy && cfg.policy.forbidden_globs) ||
