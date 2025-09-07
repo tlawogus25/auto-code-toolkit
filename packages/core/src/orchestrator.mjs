@@ -77,12 +77,12 @@ export async function runOrchestrator({ repoRoot, configPath, eventPath }) {    
   };
 
   // ★ 메타로그/스테이지 로그 파일 경로 정의(아티팩트 업로드 대상)
-  const outDir = process.env.AUTO_OUT_DIR                                             // 산출물 디렉터리
-    ? path.resolve(process.env.AUTO_OUT_DIR)                                          // 환경변수 우선
-    : path.join(repoRoot, ".github", "auto");                                         // 기본 경로
-  fs.mkdirSync(outDir, { recursive: true });                                          // 디렉터리 생성
-  const stageLogPath = path.join(outDir, "stage-log.json");                           // 스테이지 로그 경로
-  const runMetaPath  = path.join(outDir, "run-meta.json");                            // 런 메타 경로
+  const outDir = process.env.AUTO_OUT_DIR
+    ? path.resolve(process.env.AUTO_OUT_DIR)
+    : path.join(repoRoot, ".github", "auto");
+  fs.mkdirSync(outDir, { recursive: true });
+  const stageLogPath = path.join(outDir, "stage-log.json");
+  const runMetaPath  = path.join(outDir, "run-meta.json");
 
   // ★ 스테이지 로그 헬퍼: {stage, ok, details, ts} 배열로 누적 기록
   function appendStage(stage, ok, details){
@@ -370,6 +370,16 @@ export async function runOrchestrator({ repoRoot, configPath, eventPath }) {    
       { stdio: "inherit" }
     );
     appendStage("pr:comment-prompt", true, { prNumber });
+
+    // ★ 안전망: 자동 라벨 부여(플러그인 실패 대비, 중복 부착 안전)
+    const autoMerge = labelsCfg.autoMerge || "automation:auto-merge";
+    const cont = labelsCfg.continue || "automation:continue";
+    try {
+      execSync(`gh pr edit ${prNumber} --add-label ${JSON.stringify(autoMerge)} --add-label ${JSON.stringify(cont)}`, { stdio: "inherit" });
+      appendStage("pr:labels", true, { added: [autoMerge, cont] });
+    } catch (e) {
+      appendStage("pr:labels", false, { error: String(e?.message || e) });
+    }
   }
 
   for (const h of (hooks.afterPR || [])) await h(ctx);
