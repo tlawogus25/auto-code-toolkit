@@ -3,7 +3,8 @@
     "run": "automation:run",
     "autoMerge": "automation:auto-merge",
     "continue": "automation:continue",
-    "highCost": "automation:high-cost"
+    "highCost": "automation:high-cost",
+    "complete": "automation:complete"
   },
   "plugins": [
     "./packages/plugins/basic-tokens",
