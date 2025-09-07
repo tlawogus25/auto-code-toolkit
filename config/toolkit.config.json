@@ -28,8 +28,7 @@
       "^\\.env",
       "^secrets/",
       "^\\.git/",
-      "^packages/core/",
-      "^packages/plugins/",
+      "^packages/(?!core/|plugins/)",
       "^\\.github/auto/"
     ],
     "allowed_globs": [
