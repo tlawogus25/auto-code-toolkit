@@ -2,7 +2,7 @@ name: hybrid-auto-merge
 
 on:
   pull_request:
-    types: [opened, reopened, labeled, synchronize, ready_for_review]  # ← opened/reopened 추가
+    types: [reopened, labeled, synchronize, ready_for_review]  # ← opened/reopened 추가
 
 permissions:
   contents: write
