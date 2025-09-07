@@ -85,6 +85,26 @@ export async function runOrchestrator({ repoRoot, configPath, eventPath }) {    
   const stageLogPath = path.join(outDir, "stage-log.json");
   const runMetaPath  = path.join(outDir, "run-meta.json");
 
+  // ★ Service Root 고정 & 스캐폴딩 (apps/auto-<run> 또는 ENV 지정)
+  const RUN_ID = Date.now();
+  const SERVICE_ROOT = process.env.AUTO_SERVICE_ROOT
+    ? path.resolve(repoRoot, process.env.AUTO_SERVICE_ROOT)
+    : path.join(repoRoot, "apps", `auto-${RUN_ID}`);
+  const REL_SERVICE_ROOT = path.relative(repoRoot, SERVICE_ROOT) || ".";
+  fs.mkdirSync(path.join(SERVICE_ROOT, "app"), { recursive: true });
+  fs.mkdirSync(path.join(SERVICE_ROOT, "src"), { recursive: true });
+  fs.mkdirSync(path.join(SERVICE_ROOT, "tests"), { recursive: true });
+  fs.mkdirSync(path.join(SERVICE_ROOT, "docs"), { recursive: true });
+  // 초기 README(없으면)로 안내 추가
+  const readmePath = path.join(SERVICE_ROOT, "README.md");
+  if (!existsSync(readmePath)) {
+    fs.writeFileSync(
+      readmePath,
+      `# Auto Service Root\n\n- This directory is the sandbox for generated code.\n- Place app/src/docs/tests under here.\n`,
+      "utf8"
+    );
+  }
+
   // ★ 스테이지 로그 헬퍼: {stage, ok, details, ts} 배열로 누적 기록
   function appendStage(stage, ok, details){
     let arr = [];
@@ -92,6 +112,7 @@ export async function runOrchestrator({ repoRoot, configPath, eventPath }) {    
     arr.push({ stage, ok: !!ok, details: details ?? null, ts: nowIso() });
     fs.writeFileSync(stageLogPath, JSON.stringify(arr, null, 2), "utf8");
   }
+  appendStage("scaffold:service-root", true, { serviceRoot: REL_SERVICE_ROOT });
 
   // ★ 런 메타 기록: 트리거/출발점/소스 이슈/선택 LLM/모드 등 요약
   function writeRunMeta(extra){
@@ -104,7 +125,8 @@ export async function runOrchestrator({ repoRoot, configPath, eventPath }) {    
       planOnly: ctx.planOnly,
       longMode: ctx.longMode,
       llm: ctx.llm, model: ctx.model, agent: ctx.agent,
-      branch: ctx.branch, prNumber: ctx.prNumber
+      branch: ctx.branch, prNumber: ctx.prNumber,
+      serviceRoot: REL_SERVICE_ROOT,
     };
     fs.writeFileSync(runMetaPath, JSON.stringify({ ...base, ...(extra||{}) }, null, 2), "utf8");
   }
@@ -170,8 +192,11 @@ export async function runOrchestrator({ repoRoot, configPath, eventPath }) {    
 
   const systemGuard = [
     "[에이전트 가드레일]",
-    `- 허용 경로: ${(policy.allowed_globs||["src/**","app/**","docs/**"]).join(", ")}`,
+    `- 허용 경로: ${(policy.allowed_globs||["src/**","app/**","docs/**","apps/**","services/**","README.md"]).join(", ")}`,
     `- 금지 경로: ${(policy.forbidden_globs||[".env*","secrets/**",".git/**"]).join(", ")}`,
+    `- 서비스 루트(모든 신규 파일/디렉터리 생성 위치): ${REL_SERVICE_ROOT}/`,
+    "- 'app/', 'src/', 'docs/', 'tests/' 같은 루트 상대 경로가 요구되면 반드시 위 서비스 루트 하위에 생성 (예: 'src/x' → '<서비스루트>/src/x')",
+    "- 'packages/**' 경로는 편집/생성 금지(툴킷 오염 방지)",
     "- .env* / 비밀키 / .git 은 읽기·쓰기도 금지",
     "- 테스트가 있으면 실행 전략 제안",
     "- 변경은 설명 가능한 작은 커밋 단위 권장",
@@ -260,8 +285,8 @@ export async function runOrchestrator({ repoRoot, configPath, eventPath }) {    
   if (ctx.tokenFlags?.dryRun) { writeRunMeta({ dryRun: true }); return { dryRun: true, ctx }; }
   if (ctx.agent === "none" || ctx.planOnly) { writeRunMeta({ planOnly: ctx.planOnly }); return { planOnly: true, ctx }; }
 
-// orchestrator.mjs                                                                    // 파일 동일
-// Part 2/2: 에이전트 실행·체크포인트·PR 생성·메타/스테이지 기록                       // 파트 개요
+  // orchestrator.mjs                                                                    // 파일 동일
+  // Part 2/2: 에이전트 실행·체크포인트·PR 생성·메타/스테이지 기록                       // 파트 개요
 
   function checkpointCommit(msg){
     try {
@@ -280,7 +305,7 @@ export async function runOrchestrator({ repoRoot, configPath, eventPath }) {    
 
   execSync(`git config user.name "github-actions[bot]"`, { stdio: "inherit" });
   execSync(`git config user.email "github-actions[bot]@users.noreply.github.com"`, { stdio: "inherit" });
-  const branch = `auto/${Date.now()}`;
+  const branch = `auto/${RUN_ID}`;
   ctx.branch = branch;
   execSync(`git checkout -b ${branch}`, { stdio: "inherit" });
   appendStage("git:branch", true, { branch });
@@ -316,24 +341,33 @@ export async function runOrchestrator({ repoRoot, configPath, eventPath }) {    
   async function runOneStep(step) {
     for (const h of (hooks.beforeAgent || [])) await h(ctx);
     appendStage("hooks:beforeAgent", true, { step });
-    const result = await runAgentWithFallback(ctx.agentPrompt, tools, policy);
-    ctx.agentUsed = result.used || ctx.agent; // ★ 실제 사용 체인 기록
-    for (const h of (hooks.afterAgent || [])) await h(ctx);
-    appendStage("hooks:afterAgent", true, { step, ok: result.ok });
 
-    // ★★★ 안전 패치: 커밋 직전 경로 검증(허용/금지 글롭 위반 시 즉시 실패)
-    validateChangedPathsOrThrow(policy);
+    // ★★★ 핵심: 에이전트 실행을 서비스 루트(CWD)에서 수행 → 상대 경로 생성이 apps/... 하위로 고정
+    const originalCwd = process.cwd();
+    try {
+      process.chdir(SERVICE_ROOT);
+      appendStage("cwd:enter-service-root", true, { cwd: REL_SERVICE_ROOT });
+      const result = await runAgentWithFallback(ctx.agentPrompt, tools, policy);
+      ctx.agentUsed = result.used || ctx.agent; // 실제 사용 체인 기록
+      appendStage("hooks:afterAgent", true, { step, ok: result.ok });
 
-    checkpointCommit(`auto: checkpoint step ${step}`);
-    try { execSync(`git push origin ${branch}`, { stdio: "inherit" }); } catch {}
-    appendStage("git:push", true, { step });
-    ctx.loopSummary.steps.push({ step, at: nowIso(), agentUsed: result.used, ok: result.ok });
-    writeRunMeta({ loopSummary: ctx.loopSummary });
-    const diagFile = path.join(outDir, "diagnostics-last.json");
-    writeFileSync(diagFile, JSON.stringify({
-      when: nowIso(),
-      logs: [{ stage: "agent", ok: !!result.ok, out: result.used }]
-    }, null, 2), "utf8");
+      // ★★★ 안전 패치: 커밋 직전 경로 검증(허용/금지 글롭 위반 시 즉시 실패)
+      process.chdir(repoRoot); // 검증/커밋은 저장소 루트 기준으로 실행
+      validateChangedPathsOrThrow(policy);
+
+      checkpointCommit(`auto: checkpoint step ${step}`);
+      try { execSync(`git push origin ${branch}`, { stdio: "inherit" }); } catch {}
+      appendStage("git:push", true, { step });
+      ctx.loopSummary.steps.push({ step, at: nowIso(), agentUsed: result.used, ok: result.ok });
+      writeRunMeta({ loopSummary: ctx.loopSummary });
+      const diagFile = path.join(outDir, "diagnostics-last.json");
+      writeFileSync(diagFile, JSON.stringify({
+        when: nowIso(),
+        logs: [{ stage: "agent", ok: true, out: result.used }]
+      }, null, 2), "utf8");
+    } finally {
+      try { process.chdir(originalCwd); appendStage("cwd:leave-service-root", true, { restored: true }); } catch {}
+    }
   }
 
   if (ctx.longMode) {
@@ -364,8 +398,9 @@ export async function runOrchestrator({ repoRoot, configPath, eventPath }) {    
     ``,
     `- LLM (plan): **${ctx.llm}** (${ctx.model})`,
     `- Agent (requested): **${ctx.agent}**`,
-    `- Agent (actual): **${agentUsed}**`, // ★ 실제 사용 체인 표기
+    `- Agent (actual): **${agentUsed}**`,
     `- Branch: ${ctx.branch}`,
+    `- Service Root: ${REL_SERVICE_ROOT}/`,
     `- Labels: ${labelList}`,
     `- Tokens: ${tokenList}`,
     `- ${costLine}`,
@@ -380,8 +415,8 @@ export async function runOrchestrator({ repoRoot, configPath, eventPath }) {    
     "## Last Agent Prompt", "", "```", (ctx.agentPrompt || "").trim(), "```"
   ].join("\n");
 
-  const prBodyPath = path.join(outDir, `pr-body-${Date.now()}.md`);
-  const promptBodyPath = path.join(outDir, `prompt-${Date.now()}.md`);
+  const prBodyPath = path.join(outDir, `pr-body-${RUN_ID}.md`);
+  const promptBodyPath = path.join(outDir, `prompt-${RUN_ID}.md`);
   writeFileSync(prBodyPath, infoMd, "utf8");
   writeFileSync(promptBodyPath, promptMd, "utf8");
 
@@ -426,3 +461,5 @@ export async function runOrchestrator({ repoRoot, configPath, eventPath }) {    
 
   return { success: true, branch: ctx.branch, long: ctx.longMode, usage: ctx.usageTotals, prNumber: ctx.prNumber };
 }
+```0
+
