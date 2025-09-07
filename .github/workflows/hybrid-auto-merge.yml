@@ -48,13 +48,20 @@ jobs:
               github.rest.pulls.listFiles,
               {owner, repo, pull_number: pr.number}
             );
+
             const cfg = JSON.parse(process.env.CFG || "{}");
-            const allowed = (cfg.policy && cfg.policy.allowed_globs) || ["^src/","^app/","^docs/"];
-            const forbidden = (cfg.policy && cfg.policy.forbidden_globs) || ["^\\.env", "^secrets/", "^\\.git/"];
+            // 기본 허용 경로에 .github/auto/ 와 README.md를 포함
+            const allowed = (cfg.policy && cfg.policy.allowed_globs) ||
+              ["^src/", "^app/", "^docs/", "^\\.github/auto/", "^README\\.md$"];
+            const forbidden = (cfg.policy && cfg.policy.forbidden_globs) ||
+              ["^\\.env", "^secrets/", "^\\.git/"];
+
             const A = allowed.map(s=>new RegExp(s.replace(/\*\*/g,".*").replace(/\*/g,"[^/]*")));
             const F = forbidden.map(s=>new RegExp(s.replace(/\*\*/g,".*").replace(/\*/g,"[^/]*")));
+
             function inAllowed(p){ return A.some(r=>r.test(p)); }
             function inForbidden(p){ return F.some(r=>r.test(p)); }
+
             const offenders = [];
             for (const f of files) {
               const p = f.filename;
