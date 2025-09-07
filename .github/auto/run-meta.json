@@ -1,24 +1,27 @@
 {
-  "startedAt": "2025-09-06T14:35:52.038Z",
-  "event": "workflow_dispatch",
-  "source": "dispatch",
-  "sourceIssueNumber": null,
+  "startedAt": "2025-09-07T06:47:22.867Z",
+  "event": "labeled",
+  "source": "issue",
+  "sourceIssueNumber": 1,
   "tokens": [
     "edit",
     "long",
+    "time-420m",
+    "steps-6",
     "diagnose",
     "autorepair",
     "test-build",
     "lint-fix",
+    "budget-tokens-5k",
     "cooldown-15s",
-    "time-120m",
-    "steps-2"
+    "auto-merge-when-green",
+    "continue-after-merge"
   ],
   "planOnly": false,
   "longMode": false,
   "llm": "openai",
   "model": "gpt-4o",
   "agent": "cursor",
-  "branch": "auto/1757169356618",
+  "branch": "auto/1757227652324",
   "prNumber": null
 }
