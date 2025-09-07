@@ -66,10 +66,10 @@ export async function runOrchestrator({ repoRoot, configPath, eventPath }) {    
       readmePath,                                                                          // 대상
       `# Auto Service Root
 
-- This directory is the sandbox for generated code.
-- Create app/src/docs/tests under here.
+      - This directory is the sandbox for generated code.
+      - Create app/src/docs/tests under here.
 
-`,                                                                                         // 내용
+      `,                                                                                         // 내용
       "utf8"                                                                               // 인코딩
     );                                                                                     // 쓰기 끝
   }
