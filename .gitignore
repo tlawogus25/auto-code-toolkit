@@ -1,7 +1,25 @@
-.github/auto/*.json
 actions-runner/
 make_repo_snapshot.sh
 
 repo_snapshot_branch.md
 repo_snapshot.md
 repo_snapshot_20250903-003028.md
+
+# Auto-code runtime logs (do not commit)
+.github/auto/*.json
+
+# Node
+node_modules/
+npm-debug.log*
+pnpm-lock.yaml
+yarn.lock
+
+# Build outputs
+dist/
+.out/
+.next/
+coverage/
+
+# OS / Editor
+.DS_Store
+*.swp
