@@ -1,9 +1,9 @@
 {
   "labels": {
-    "run": "automation:run",                
-    "autoMerge": "automation:auto-merge",   
-    "continue": "automation:continue",      
-    "highCost": "automation:high-cost"     
+    "run": "automation:run",
+    "autoMerge": "automation:auto-merge",
+    "continue": "automation:continue",
+    "highCost": "automation:high-cost"
   },
   "plugins": [
     "./packages/plugins/basic-tokens",
@@ -45,7 +45,8 @@
       "src/**",
       "app/**",
       "docs/**",
-      "^README\\.md$"
+      "^README\\.md$",
+      ".github/auto/**"
     ],
     "plan_only_threshold_chars": 8000,
     "hard_stop_chars_without_high_cost_label": 20000
