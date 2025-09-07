@@ -19,7 +19,9 @@
     "claude": {
       "cli": "claude",
       "permission_mode": "acceptEdits",
-      "allowed_tools": ["Read", "Bash"]
+      "allowed_tools": ["Read", "Bash"],
+      "default": "claude-3-haiku-latest",          
+      "heavy": "claude-3.5-sonnet-latest"          
     },
     "cursor": { "cli": "cursor-agent", "force": false }
   },
