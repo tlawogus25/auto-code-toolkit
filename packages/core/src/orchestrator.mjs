@@ -305,7 +305,7 @@ export async function runOrchestrator({ repoRoot, configPath, eventPath }) {    
   if (ctx.tokenFlags?.dryRun) { writeRunMeta({ dryRun: true }); return { dryRun: true, ctx }; } // 드라이런 종료
   if (ctx.agent === "none" || ctx.planOnly) { writeRunMeta({ planOnly: ctx.planOnly }); return { planOnly: true, ctx }; } // 에이전트 스킵
   // Part 2/2에서 계속                                                                           // 파트 전환 주석
-}
+
 // packages/core/src/orchestrator.mjs                                                        // 파일 계속
 // Part 2/2: 에이전트 실행·체크포인트·PR 생성·사용량 파일 저장                               // 파트 개요
 
