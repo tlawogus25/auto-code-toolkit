@@ -1,24 +1,16 @@
 {
-  "startedAt": "2025-09-06T14:35:52.038Z",
-  "event": "workflow_dispatch",
-  "source": "dispatch",
-  "sourceIssueNumber": null,
-  "tokens": [
-    "edit",
-    "long",
-    "diagnose",
-    "autorepair",
-    "test-build",
-    "lint-fix",
-    "cooldown-15s",
-    "time-120m",
-    "steps-2"
-  ],
+  "startedAt": "2025-09-08T15:48:47.732Z",
+  "event": "labeled",
+  "source": "issue",
+  "sourceIssueNumber": 60,
+  "tokens": [],
   "planOnly": false,
   "longMode": false,
-  "llm": "openai",
-  "model": "gpt-4o",
-  "agent": "cursor",
-  "branch": "auto/1757169356618",
-  "prNumber": null
+  "llm": null,
+  "model": null,
+  "agent": null,
+  "branch": "auto/1757346527715",
+  "prNumber": null,
+  "agentModel": null,
+  "serviceRoot": "apps/auto-1757346511380"
 }
